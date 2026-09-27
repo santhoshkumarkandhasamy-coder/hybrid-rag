@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.git/
+.gitignore
+
+.env
+
+.streamlit/
+
+data/uploads/
+data/faiss/
+
+*.log

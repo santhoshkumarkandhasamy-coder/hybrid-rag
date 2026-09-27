@@ -1,0 +1,46 @@
+services:
+
+  backend:
+    image: hybrid-rag-backend:latest
+    container_name: hybrid-rag-backend
+
+    env_file:
+      - .env
+
+    environment:
+      BACKEND_URL: http://backend:8000
+
+    volumes:
+      - ./data:/app/data
+
+    expose:
+      - "8000"
+
+    restart: unless-stopped
+
+    networks:
+      - hybrid-rag-network
+
+
+  frontend:
+    image: hybrid-rag-frontend:latest
+    container_name: hybrid-rag-frontend
+
+    environment:
+      BACKEND_URL: http://backend:8000
+
+    ports:
+      - "8501:8501"
+
+    depends_on:
+      - backend
+
+    restart: unless-stopped
+
+    networks:
+      - hybrid-rag-network
+
+
+networks:
+  hybrid-rag-network:
+    driver: bridge
