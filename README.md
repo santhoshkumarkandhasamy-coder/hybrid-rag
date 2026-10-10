@@ -1,272 +1,533 @@
-Hybrid RAG: Vector Search + Knowledge Graph
-A Retrieval-Augmented Generation (RAG) application that combines semantic vector search with a Neo4j knowledge graph to answer questions from uploaded documents. The project separates document ingestion from chat retrieval and uses a FastAPI backend with a Streamlit frontend.
-Repository: https://github.com/santhoshkumarkandhasamy-coder/hybrid-rag
-Table of Contents
-Overview
-Features
-Architecture
-Technology Stack
-Project Structure
-Prerequisites
-Installation
-Environment Configuration
-Run the Application
-How It Works
-API Documentation
-Troubleshooting
-Security Notes
-Roadmap
-Overview
-Traditional RAG systems usually retrieve relevant text chunks from a vector database. A knowledge graph adds another way to retrieve information: it represents entities and their relationships, making it useful for questions involving people, organizations, locations, concepts, and connections between them.
-This project is designed to:
-Accept document uploads through the frontend.
-Extract and split document text into manageable chunks.
-Create local embeddings and index the chunks in FAISS.
-Extract entities and relationships and store them in Neo4j.
-Retrieve relevant context from both the vector index and the knowledge graph when a user asks a question.
-Combine the retrieved context and send it to the language model to generate one grounded answer.
-> **Note:** Exact file types and endpoints depend on the loaders and API routes implemented in the current checkout. The setup below describes the intended architecture; keep the README aligned with the code as the project evolves.
-Features
-Document upload through a Streamlit user interface.
-FastAPI backend for ingestion and question-answering APIs.
-Vector retrieval using FAISS.
-Local embeddings using Sentence Transformers, intended to use `BAAI/bge-small-en-v1.5`.
-Knowledge graph storage using Neo4j Aura or a self-hosted Neo4j instance.
-Entity and relationship extraction using an LLM.
-Hybrid retrieval that combines vector-search results and graph context.
-Grounded answers generated from retrieved document context.
-Separate ingestion and chat pipelines for easier debugging and maintenance.
-Architecture
-Pipeline 1: Document ingestion
+# Hybrid RAG — Vector Database + Knowledge Graph
+
+A Hybrid Retrieval-Augmented Generation (RAG) application that combines **vector similarity search** with **knowledge graph retrieval** to answer questions from uploaded PDF documents.
+
+The project uses FastAPI for the backend, Streamlit for the frontend, FAISS for vector search, Neo4j for knowledge graph storage, and LangChain to orchestrate the RAG pipeline.
+
+## Features
+
+- **PDF Upload:** Upload PDF documents through the Streamlit interface.
+- **Text Extraction:** Extract document content using PyPDF.
+- **Text Chunking:** Split extracted text into manageable chunks using LangChain text splitters.
+- **Vector Search:** Store document embeddings in FAISS and retrieve semantically relevant content.
+- **Knowledge Graph:** Extract entities and relationships and store them in Neo4j.
+- **Hybrid Retrieval:** Combine vector search results with knowledge graph results.
+- **LLM Answer Generation:** Use an OpenAI model through LangChain to generate a unified answer.
+- **Automatic Chat Activation:** Enable chat when both vector indexing and graph indexing complete successfully.
+- **REST API:** Expose document ingestion and question-answering functionality through FastAPI.
+- **Source References:** Design the retrieval pipeline to retain document and chunk metadata for answer citations.
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Programming Language | Python |
+| Frontend | Streamlit |
+| Backend | FastAPI |
+| API Server | Uvicorn |
+| PDF Processing | PyPDF |
+| RAG Orchestration | LangChain |
+| Text Splitting | LangChain Text Splitters |
+| Embeddings Integration | LangChain OpenAI |
+| Vector Index | FAISS |
+| Knowledge Graph | Neo4j |
+| LLM | OpenAI API |
+| Configuration | python-dotenv, pydantic-settings |
+| HTTP Communication | HTTPX |
+
+## System Architecture
+
 ```text
-User uploads a document
-        |
-        v
-FastAPI upload endpoint
-        |
-        v
-Text extraction
-        |
-        v
-Text cleaning and chunking
-        |
-        +-------------------------------+
-        |                               |
-        v                               v
-Embedding model                 Entity / relationship
-        |                       extraction with an LLM
-        v                               |
-FAISS vector index                      v
-                                Neo4j knowledge graph
-        |                               |
-        +---------------+---------------+
-                        |
-                        v
-                 Ingestion complete
+                 USER
+                   |
+                   v
+          +------------------+
+          | Streamlit UI     |
+          | Upload and Chat  |
+          +--------+---------+
+                   |
+                   v
+          +------------------+
+          | FastAPI Backend  |
+          +--------+---------+
+                   |
+             PDF Ingestion
+                   |
+                   v
+          +------------------+
+          | PyPDF Text Loader |
+          +--------+---------+
+                   |
+                   v
+          +------------------+
+          | Text Chunking    |
+          +--------+---------+
+                   |
+          +--------+---------+
+          |                  |
+          v                  v
+  +---------------+  +------------------+
+  | Embeddings    |  | Entity and        |
+  | Generation    |  | Relationship      |
+  |               |  | Extraction        |
+  +-------+-------+  +---------+--------+
+          |                    |
+          v                    v
+  +---------------+  +------------------+
+  | FAISS         |  | Neo4j            |
+  | Vector Index  |  | Knowledge Graph  |
+  +-------+-------+  +---------+--------+
+          |                    |
+          +---------+----------+
+                    |
+                    v
+          +------------------+
+          | Hybrid Retriever |
+          +--------+---------+
+                   |
+                   v
+          +------------------+
+          | Context Fusion   |
+          +--------+---------+
+                   |
+                   v
+          +------------------+
+          | OpenAI LLM       |
+          +--------+---------+
+                   |
+                   v
+          +------------------+
+          | Final Answer     |
+          +------------------+
 ```
-Pipeline 2: Question answering
-```text
-User asks a question in Streamlit
-        |
-        v
-FastAPI chat endpoint
-        |
-        +-------------------------------+
-        |                               |
-        v                               v
-Vector similarity search        Neo4j graph retrieval
-        |                               |
-        +---------------+---------------+
-                        |
-                        v
-             Merge relevant context
-                        |
-                        v
-              LLM answer generation
-                        |
-                        v
-             Answer shown in Streamlit
-```
-The vector index is useful for semantic similarity between a question and document passages. The graph is useful for entity and relationship lookups. Combining both can improve retrieval for questions that need both descriptive passages and connected facts.
-Technology Stack
-Component	Technology
-Frontend	Streamlit
-Backend API	FastAPI
-ASGI server	Uvicorn
-Vector database/index	FAISS
-Embeddings	Sentence Transformers (`BAAI/bge-small-en-v1.5`, intended model)
-Knowledge graph	Neo4j / Neo4j Aura
-LLM	OpenAI API
-PDF text extraction	pypdf
-Configuration	python-dotenv
-Language	Python
-Project Structure
-The following is a reference structure for the intended application. Your repository may contain additional files or different module names.
+
+## Project Structure
+
 ```text
 hybrid-rag/
-├── backend/
-│   ├── main.py
-│   ├── api/
-│   │   └── upload.py
-│   ├── ingestion/
-│   │   ├── pdf_loader.py
-│   │   ├── chunker.py
-│   │   ├── embeddings.py
-│   │   └── vector_store.py
-│   ├── retrieval/
-│   │   └── vector_search.py
-│   └── models/
-│       └── schemas.py
-├── frontend/
-│   └── app.py
-├── data/
-│   ├── uploads/
-│   └── faiss/
-├── tests/
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
+|
+|-- backend/
+|   |-- app/
+|   |   |-- __init__.py
+|   |   |-- main.py
+|   |   |
+|   |   |-- api/
+|   |   |   |-- __init__.py
+|   |   |   |-- upload.py
+|   |   |   |-- chat.py
+|   |   |
+|   |   |-- core/
+|   |   |   |-- __init__.py
+|   |   |   |-- config.py
+|   |   |
+|   |   |-- ingestion/
+|   |   |   |-- __init__.py
+|   |   |   |-- loader.py
+|   |   |   |-- chunker.py
+|   |   |   |-- pipeline.py
+|   |   |
+|   |   |-- vectorstore/
+|   |   |   |-- __init__.py
+|   |   |   |-- faiss_store.py
+|   |   |
+|   |   |-- knowledge_graph/
+|   |   |   |-- __init__.py
+|   |   |   |-- ner.py
+|   |   |   |-- neo4j_store.py
+|   |   |
+|   |   |-- retrieval/
+|   |   |   |-- __init__.py
+|   |   |   |-- vector_retriever.py
+|   |   |   |-- graph_retriever.py
+|   |   |   |-- hybrid_retriever.py
+|   |   |
+|   |   |-- llm/
+|   |       |-- __init__.py
+|   |       |-- generator.py
+|   |
+|   |-- data/
+|   |   |-- uploads/
+|   |   |-- processed/
+|   |
+|   |-- faiss_db/
+|   |-- requirements.txt
+|   |-- .env
+|
+|-- frontend/
+|   |-- app.py
+|   |-- api_client.py
+|   |-- requirements.txt
+|
+|-- docker-compose.yml
+|-- .gitignore
+|-- README.md
 ```
-Keep uploaded documents, FAISS index files, credentials, and generated private data out of version control.
-Prerequisites
+
+## Prerequisites
+
 Install the following before starting:
-Python 3.10 or newer (use the version supported by your dependencies).
-Git.
-An OpenAI API key with API access and available billing/credits.
-A Neo4j database, such as a Neo4j Aura instance.
-Internet access for installing packages and downloading the embedding model on first use.
-Installation
-1. Clone the repository
+
+- Python 3.11 or a compatible Python version supported by the selected dependencies.
+- Visual Studio Code.
+- Git (optional, for version control).
+- An OpenAI API key.
+- A running Neo4j instance, either local or hosted.
+- Internet access for installing packages and calling the OpenAI API.
+
+Docker can be used later to simplify Neo4j setup and application deployment.
+
+## Installation and Setup
+
+### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/santhoshkumarkandhasamy-coder/hybrid-rag.git
 cd hybrid-rag
 ```
-2. Create and activate a virtual environment
-Windows — PowerShell
+
+Alternatively, open your existing project folder in Visual Studio Code.
+
+### 2. Create a Virtual Environment
+
+On Windows PowerShell:
+
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv venv
 ```
-Windows — Command Prompt
-```bat
-python -m venv .venv
-.venv\Scripts\activate.bat
+
+Activate it:
+
+```powershell
+.\venv\Scripts\Activate.ps1
 ```
-Linux / macOS
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+
+If PowerShell blocks script execution, you can use:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
-3. Install dependencies
-If the repository contains `requirements.txt`:
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+
+Then activate the environment again.
+
+### 3. Install Backend Dependencies
+
+```powershell
+pip install -r backend/requirements.txt
 ```
-If a requirements file is not present, create one containing the dependencies actually imported by your code. Typical packages for this architecture include:
-```text
-fastapi
-uvicorn[standard]
-python-multipart
-python-dotenv
-pypdf
-sentence-transformers
-faiss-cpu
-neo4j
-openai
-streamlit
+
+### 4. Install Frontend Dependencies
+
+```powershell
+pip install -r frontend/requirements.txt
 ```
-Do not install this example list in addition to an existing dependency file without checking for version conflicts.
-Environment Configuration
-Create a `.env` file in the project root. Do not commit it to Git.
+
+### 5. Configure Environment Variables
+
+Create or edit `backend/.env`:
+
 ```env
 # OpenAI
 OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4o-mini
 
 # Neo4j
-NEO4J_URI=neo4j+s://your-instance.databases.neo4j.io
+NEO4J_URI=bolt://localhost:7687
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your_neo4j_password
 
-# Optional application settings, if supported by your code
-EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+# Application
+BACKEND_HOST=127.0.0.1
+BACKEND_PORT=8000
+
+# Storage
+FAISS_DB_PATH=./faiss_db
+UPLOAD_DIR=./data/uploads
 ```
-Use the exact environment-variable names expected by your source code. For Neo4j Aura, copy the connection URI and credentials from your database's connection details. Never publish API keys or database passwords in your repository, screenshots, logs, or issue reports.
-Run the Application
-Run these commands from the repository root, with the virtual environment activated.
-1. Start the FastAPI backend
-```bash
-uvicorn backend.main:app --reload
-```
-If your entry point is different, replace `backend.main:app` with the module and application variable used in your code.
-The backend will typically be available at:
-API base: `http://127.0.0.1:8000`
-Swagger UI: `http://127.0.0.1:8000/docs`
-ReDoc: `http://127.0.0.1:8000/redoc`
-2. Start the Streamlit frontend
-Open a second terminal, activate the same virtual environment, and run:
-```bash
-streamlit run frontend/app.py
-```
-Streamlit normally opens the UI in your browser. If the frontend cannot connect to the backend, check the API base URL configured in the frontend and confirm that FastAPI is running.
-3. Use the application
-Open the Streamlit page.
-Upload a supported document.
-Start ingestion and wait for the operation to complete.
-Ask a question about the uploaded content.
-Review the answer and, where implemented, the retrieved context or source information.
-Chat should be enabled after ingestion succeeds and the required vector and graph resources are available.
-How It Works
-1. Text extraction and chunking
-The ingestion pipeline extracts text from a supported document and divides it into smaller chunks. Chunking helps retrieve focused passages rather than sending an entire document to the language model.
-2. Embedding and FAISS indexing
-Each chunk is converted into a numerical embedding by the configured Sentence Transformers model. FAISS indexes these vectors so the system can find semantically similar passages for a question.
-3. Knowledge graph construction
-An LLM-based extraction step identifies entities and relationships from the document text. These are written to Neo4j as graph nodes and relationships. Validate extracted facts and use stable identifiers to reduce duplicate entities.
-4. Hybrid retrieval
-When a user asks a question, the system retrieves relevant vector chunks and queries the graph for related entities and relationships. The results are combined into context for answer generation.
-5. Answer generation
-The LLM receives the user's question and the retrieved context. The prompt should instruct it to prioritize that context, avoid inventing unsupported facts, and clearly say when the available documents do not contain the answer.
-API Documentation
-FastAPI can generate interactive API documentation automatically. After starting the backend, open:
+
+Replace the example credentials with your own values.
+
+**Security:** Never commit `.env` or expose API keys and database passwords in GitHub.
+
+### 6. Start Neo4j
+
+Start your Neo4j database and verify that it is accessible.
+
+For a local installation, the default Bolt connection is:
+
 ```text
-http://127.0.0.1:8000/docs
+bolt://localhost:7687
 ```
-Use the documentation to inspect the actual endpoints, request schemas, and response formats exposed by your current code. Common operations in this type of project include document upload/ingestion, ingestion status, and question answering; endpoint paths may vary by implementation.
-Troubleshooting
-`ModuleNotFoundError`
-Activate the project's virtual environment and install the packages from `requirements.txt`. Run commands from the repository root so Python can resolve the `backend` package.
-`Error loading ASGI app`
-Confirm that the module path and FastAPI variable match your source code. For example, `uvicorn backend.main:app --reload` expects `backend/main.py` to define an object named `app`.
-OpenAI authentication or quota error
-Check that `OPENAI_API_KEY` is set correctly, that the application loads the `.env` file, and that your API account has access and available quota. ChatGPT subscriptions and OpenAI API billing are separate.
-Neo4j connection failure
-Verify the URI, username, password, network access, and database status. Use the URI scheme supplied by your Neo4j provider. Do not print credentials when debugging.
-FAISS index or embedding errors
-Check that the embedding model downloads successfully, the same model is used for indexing and querying, and the stored index is compatible with the installed FAISS version. Rebuild the index if the embedding model or vector dimension changes.
-Frontend cannot reach the backend
-Ensure both services are running, check the backend URL configured in Streamlit, and inspect the FastAPI terminal for errors.
-Chat is unavailable after upload
-Confirm that ingestion completed successfully and that the application has initialized the required vector index and graph connection. Check backend logs for failures in text extraction, embedding, entity extraction, or Neo4j writes.
-Security Notes
-Keep `.env`, API keys, database credentials, uploaded private documents, and local indexes out of Git.
-Add `.env`, virtual environments, Python cache files, and generated data directories to `.gitignore` as appropriate.
-Validate upload file types and sizes.
-Do not expose the development server publicly without appropriate authentication, HTTPS, and deployment configuration.
-Treat LLM-extracted entities and relationships as potentially inaccurate and validate them where correctness matters.
-Roadmap
-Potential improvements for this project include:
-Improve document format support and extraction quality.
-Add ingestion progress and clear error messages in the UI.
-Add source citations and document/page metadata to answers.
-Add graph-aware retrieval and configurable vector/graph result fusion.
-Add document deletion, re-ingestion, and index rebuild operations.
-Add automated tests for ingestion, retrieval, and API endpoints.
-Add Docker and Docker Compose deployment support.
-Add evaluation tests for answer relevance and grounding.
-Contributing
-Contributions and suggestions are welcome. Please open an issue to discuss a significant change before submitting a pull request.
-License
-Add the license that applies to this repository. Do not claim a license unless a corresponding `LICENSE` file is included.
+
+For Neo4j Aura, use the connection URI and credentials supplied by your Aura instance.
+
+Ensure the connection details match `backend/.env`.
+
+## Running the Application
+
+Run the backend and frontend in separate terminals.
+
+### 1. Start FastAPI
+
+From the project root:
+
+```powershell
+cd backend
+..\venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload
+```
+
+The API will be available at:
+
+- API root: http://127.0.0.1:8000
+- Swagger UI: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+
+### 2. Start Streamlit
+
+Open another terminal from the project root:
+
+```powershell
+cd frontend
+..\venv\Scripts\Activate.ps1
+streamlit run app.py
+```
+
+Streamlit will display the local URL in the terminal, usually:
+
+http://localhost:8501
+
+Keep both applications running while using the system.
+
+## Pipeline 1 — Document Ingestion
+
+The ingestion pipeline processes the uploaded PDF and indexes its content in both storage systems.
+
+```text
+Upload PDF
+    |
+    v
+Validate File
+    |
+    v
+Extract Text with PyPDF
+    |
+    v
+Split Text into Chunks
+    |
+    +------------------------+
+    |                        |
+    v                        v
+Generate Embeddings    Extract Entities
+    |                  and Relationships
+    v                        |
+Store in FAISS               v
+                       Create Graph
+                       in Neo4j
+    |                        |
+    +------------+-----------+
+                 |
+                 v
+        Verify Both Indexes
+                 |
+                 v
+       Mark Ingestion Complete
+                 |
+                 v
+          Enable Chat
+```
+
+The application should enable chat only when both indexing operations have succeeded for the selected document.
+
+## Pipeline 2 — Hybrid Question Answering
+
+When a user submits a question, the backend queries both retrieval systems.
+
+```text
+User Question
+      |
+      +----------------------+
+      |                      |
+      v                      v
+FAISS Vector Search    Neo4j Graph Search
+      |                      |
+      v                      v
+Relevant Chunks        Related Entities
+and Metadata           and Relationships
+      |                      |
+      +-----------+----------+
+                  |
+                  v
+           Combine Context
+                  |
+                  v
+          LangChain + OpenAI
+                  |
+                  v
+          Generate One Answer
+                  |
+                  v
+          Return to Streamlit
+```
+
+Vector retrieval finds semantically relevant passages. Graph retrieval finds explicit entity relationships and connected facts. The combined evidence is provided to the language model to generate a single response.
+
+## API Design
+
+The following endpoints are planned for the application. Their availability depends on implementation.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/` | Backend welcome message |
+| GET | `/health` | Check backend health |
+| POST | `/upload` | Upload a PDF |
+| POST | `/ingest` | Start document ingestion, if exposed separately |
+| GET | `/ingest/status` | Check ingestion status |
+| POST | `/chat` | Ask a question about indexed documents |
+
+The Swagger interface at `/docs` can be used to test implemented endpoints.
+
+## Core Modules
+
+| File | Responsibility |
+|---|---|
+| `main.py` | Create the FastAPI application and register routes |
+| `core/config.py` | Load environment configuration |
+| `api/upload.py` | Handle document upload requests |
+| `api/chat.py` | Handle question-answering requests |
+| `ingestion/loader.py` | Extract PDF text |
+| `ingestion/chunker.py` | Split text into chunks |
+| `ingestion/pipeline.py` | Coordinate ingestion and indexing |
+| `vectorstore/faiss_store.py` | Manage embeddings and FAISS persistence |
+| `knowledge_graph/ner.py` | Extract entities and relationships |
+| `knowledge_graph/neo4j_store.py` | Create and query graph data |
+| `retrieval/vector_retriever.py` | Retrieve relevant document chunks |
+| `retrieval/graph_retriever.py` | Retrieve graph-related facts |
+| `retrieval/hybrid_retriever.py` | Combine vector and graph results |
+| `llm/generator.py` | Generate final answers using the LLM |
+| `frontend/api_client.py` | Communicate with FastAPI |
+| `frontend/app.py` | Provide upload, status, and chat UI |
+
+## Storage and Persistence
+
+### FAISS
+
+FAISS stores vectors for semantic retrieval. The application must save and reload the index and its associated document metadata so that indexed content remains available after a backend restart.
+
+The configured directory is:
+
+```text
+backend/faiss_db/
+```
+
+### Neo4j
+
+Neo4j stores entities and their relationships as a graph. The graph schema, entity extraction logic, and Cypher queries will be implemented in the backend.
+
+### Uploaded Documents
+
+Uploaded PDFs are stored under:
+
+```text
+backend/data/uploads/
+```
+
+Processed content and intermediate data can be stored under:
+
+```text
+backend/data/processed/
+```
+
+Ensure these directories are writable and configure suitable file-size limits and access controls.
+
+## Error Handling and Reliability
+
+The application should:
+
+- Validate uploaded file types and sizes.
+- Handle empty or unreadable PDFs.
+- Report ingestion failures clearly.
+- Track vector and graph indexing status separately.
+- Avoid enabling chat when either indexing operation fails.
+- Preserve document IDs and chunk metadata for retrieval.
+- Handle unavailable Neo4j and OpenAI services.
+- Avoid returning unsupported answers when the retrieved context is insufficient.
+
+## Security
+
+- Keep secrets in environment variables.
+- Exclude `.env` from version control.
+- Validate uploaded files.
+- Use authenticated database connections.
+- Avoid exposing internal exception details to users.
+- Configure authentication and HTTPS before public deployment.
+- Use appropriate permissions for uploaded files and persistent indexes.
+
+## Development Roadmap
+
+- [ ] Create the project structure.
+- [ ] Configure FastAPI and Streamlit.
+- [ ] Connect Neo4j.
+- [ ] Implement PDF text extraction.
+- [ ] Implement text chunking.
+- [ ] Generate embeddings and create a FAISS index.
+- [ ] Extract entities and relationships.
+- [ ] Store graph data in Neo4j.
+- [ ] Implement vector retrieval.
+- [ ] Implement graph retrieval.
+- [ ] Implement hybrid retrieval and context fusion.
+- [ ] Integrate OpenAI answer generation.
+- [ ] Connect the upload API to the ingestion pipeline.
+- [ ] Enable chat automatically after successful indexing.
+- [ ] Add source citations and error handling.
+- [ ] Add tests and logging.
+- [ ] Containerize the application with Docker.
+- [ ] Deploy to a VPS.
+
+## Troubleshooting
+
+### FastAPI Does Not Start
+
+Confirm that the virtual environment is activated and the dependencies are installed.
+
+```powershell
+pip install -r backend/requirements.txt
+```
+
+Run the backend from the `backend` directory:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+### Streamlit Cannot Connect to FastAPI
+
+Verify that FastAPI is running and that the frontend API URL matches:
+
+```text
+http://127.0.0.1:8000
+```
+
+### OpenAI Authentication Errors
+
+Check that `OPENAI_API_KEY` is valid and that the application loads `backend/.env` correctly.
+
+### Neo4j Connection Errors
+
+Check the URI, username, password, database availability, and network connectivity.
+
+### FAISS Loading Errors
+
+Ensure the saved index and metadata belong to compatible versions and have not been moved or corrupted. Only load locally saved FAISS indexes from trusted sources.
+
+## License
+
+Choose and add a license before distributing this project publicly.
+
+---
+
+**Project:** Hybrid RAG — Vector Database + Knowledge Graph  
+**Backend:** FastAPI  
+**Frontend:** Streamlit  
+**Vector Index:** FAISS  
+**Graph Database:** Neo4j  
+**RAG Framework:** LangChain  
+**LLM Integration:** OpenAI
