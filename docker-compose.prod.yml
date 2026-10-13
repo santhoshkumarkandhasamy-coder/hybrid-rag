@@ -1,0 +1,57 @@
+# Production: only Caddy is exposed (80/443). Backend and UI stay private.
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+
+  caddy:
+    image: caddy:2
+    container_name: hybrid-rag-caddy
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+    networks: [hybrid-rag-network]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: hybrid-rag-backend
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    networks: [hybrid-rag-network]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: hybrid-rag-frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    expose:
+      - "8501"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks: [hybrid-rag-network]
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  hybrid-rag-network:
+    driver: bridge
