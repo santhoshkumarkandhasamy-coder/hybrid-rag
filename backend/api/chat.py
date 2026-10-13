@@ -91,9 +91,15 @@ def chat(request: SearchRequest, user=Depends(get_current_user)):
 
     audit(user, "chat.query", f"{len(document_ids)} document(s)")
 
+    # Only list files whose name the answer actually cites / quotes
+    # (offline mode); LLM mode may cite any retrieved file.
+    retrieved = {
+        r["filename"] for r in results["vector_results"]
+        if r.get("filename")
+    }
     sources = sorted(
-        {r["filename"] for r in results["vector_results"]
-         if r.get("filename")}
+        name for name in retrieved
+        if config.USE_OPENAI or f"({name})" in answer
     )
 
     return {

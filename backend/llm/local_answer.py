@@ -29,7 +29,7 @@ def generate_answer(
     for rank, result in enumerate(vector_results):
         for sentence in _SENT.split(result.get("content", "")):
             sentence = sentence.strip()
-            if len(sentence) < 20:
+            if len(sentence) < 8:
                 continue
             overlap = len(terms & _terms(sentence))
             # prefer keyword overlap, then better-ranked chunks
