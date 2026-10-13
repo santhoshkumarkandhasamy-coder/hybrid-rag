@@ -569,3 +569,11 @@ embeddings are local (BAAI/bge-small, downloaded once), the knowledge graph is
 stored in SQLite with built-in entity extraction, and answers are assembled
 from the best-matching passages of your files (with source names). Add an
 OpenAI key and/or Neo4j credentials later to switch to LLM answers and Neo4j.
+
+### Quick start
+
+- **Windows:** double-click `run.bat`
+- **Mac/Linux:** `./run.sh`
+- **Docker:** `docker compose up --build`
+
+Then open http://localhost:8501 and sign in as `admin` (password = `ADMIN_PASSWORD` in `.env`).

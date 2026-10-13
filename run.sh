@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# One-command local start (Mac/Linux): ./run.sh
+set -e
+cd "$(dirname "$0")"
+[ -f .env ] || { cp .env.example .env; echo "Created .env (admin password: see ADMIN_PASSWORD in it)"; }
+[ -d venv ] || python3 -m venv venv
+source venv/bin/activate
+pip install -q -r backend/requirements.txt
+uvicorn backend.main:app --port 8000 &
+BACK=$!
+trap "kill $BACK" EXIT
+sleep 4
+echo "Open http://localhost:8501"
+streamlit run frontend/app.py
