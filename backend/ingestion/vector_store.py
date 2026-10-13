@@ -1,7 +1,9 @@
+import shutil
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
 
+from backend.core import config
 from backend.ingestion.embeddings import (
     get_embedding_model,
 )
@@ -11,7 +13,7 @@ from backend.ingestion.embeddings import (
 # FAISS Storage Directory
 # ==========================================
 
-FAISS_BASE_DIR = Path("data/faiss")
+FAISS_BASE_DIR = config.FAISS_DIR
 
 
 # ==========================================
@@ -20,6 +22,7 @@ FAISS_BASE_DIR = Path("data/faiss")
 
 def create_vector_store(
     chunks: list[str],
+    metadatas: list[dict] | None = None,
 ) -> FAISS:
 
     if not chunks:
@@ -32,6 +35,7 @@ def create_vector_store(
     vector_store = FAISS.from_texts(
         texts=chunks,
         embedding=embedding_model,
+        metadatas=metadatas,
     )
 
     return vector_store
@@ -93,3 +97,15 @@ def load_vector_store(
     )
 
     return vector_store
+
+
+# ==========================================
+# Delete Vector Store
+# ==========================================
+
+def delete_vector_store(document_id: str) -> None:
+
+    shutil.rmtree(
+        FAISS_BASE_DIR / document_id,
+        ignore_errors=True,
+    )

@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 data/uploads/
 data/faiss/
+data/
+*.db
+.pytest_cache/

@@ -1,73 +1,58 @@
-from pathlib import Path
+"""Read text out of every supported upload format."""
+
+import shutil
 import subprocess
 import tempfile
-import shutil
-
-from pypdf import PdfReader
-from docx import Document
-from openpyxl import load_workbook
-from PIL import Image
-import pytesseract
-
+from pathlib import Path
 
 # ============================================================
 # SUPPORTED FILE TYPES
 # ============================================================
 
-SUPPORTED_EXTENSIONS = {
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".xlsx",
-    ".png",
-    ".jpg",
-    ".jpeg",
+# Legacy binary formats are converted with LibreOffice first.
+LEGACY_CONVERSIONS = {
+    ".doc": "docx",
+    ".xls": "xlsx",
+    ".ppt": "pptx",
 }
+
+IMAGE_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
+}
+
+HTML_EXTENSIONS = {".html", ".htm"}
+
+TEXT_EXTENSIONS = {".txt", ".md", ".csv"}
+
+SUPPORTED_EXTENSIONS = (
+    {".pdf", ".docx", ".xlsx", ".pptx"}
+    | set(LEGACY_CONVERSIONS)
+    | IMAGE_EXTENSIONS
+    | HTML_EXTENSIONS
+    | TEXT_EXTENSIONS
+)
+
+# Minimum characters on a PDF page before we consider it "scanned"
+_PDF_OCR_THRESHOLD = 20
 
 
 # ============================================================
-# FIND LIBREOFFICE
+# LIBREOFFICE (legacy .doc / .xls / .ppt)
 # ============================================================
 
 def find_libreoffice() -> str:
-    """
-    Find LibreOffice executable on Windows or Linux.
-    """
 
-    # --------------------------------------------------------
-    # 1. Check PATH
-    # --------------------------------------------------------
-
-    soffice = shutil.which("soffice")
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
 
     if soffice:
         return soffice
 
-    # --------------------------------------------------------
-    # 2. Windows installation locations
-    # --------------------------------------------------------
-
-    windows_paths = [
+    for path in (
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-    ]
-
-    for path in windows_paths:
-
-        if Path(path).exists():
-            return path
-
-    # --------------------------------------------------------
-    # 3. Linux / Docker locations
-    # --------------------------------------------------------
-
-    linux_paths = [
         "/usr/bin/soffice",
         "/usr/local/bin/soffice",
-    ]
-
-    for path in linux_paths:
-
+    ):
         if Path(path).exists():
             return path
 
@@ -76,88 +61,59 @@ def find_libreoffice() -> str:
     )
 
 
-# ============================================================
-# CONVERT DOC → DOCX
-# ============================================================
-
-def convert_doc_to_docx(file_path: str) -> str:
-    """
-    Convert legacy .DOC file to .DOCX using LibreOffice.
-    """
+def convert_with_libreoffice(file_path: str, target: str) -> str:
+    """Convert a legacy Office file to `target` (docx/xlsx/pptx)."""
 
     input_path = Path(file_path)
 
-    if not input_path.exists():
-
-        raise FileNotFoundError(
-            f"DOC file not found: {file_path}"
-        )
-
-    # Find LibreOffice
-    libreoffice = find_libreoffice()
-
-    # Temporary output directory
-    output_dir = Path(
-        tempfile.mkdtemp(
-            prefix="doc_conversion_"
-        )
-    )
-
-    command = [
-        libreoffice,
-        "--headless",
-        "--convert-to",
-        "docx",
-        "--outdir",
-        str(output_dir),
-        str(input_path),
-    ]
+    output_dir = Path(tempfile.mkdtemp(prefix="office_conversion_"))
 
     try:
-
         result = subprocess.run(
-            command,
+            [
+                find_libreoffice(),
+                "--headless",
+                "--convert-to", target,
+                "--outdir", str(output_dir),
+                str(input_path),
+            ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,
         )
-
     except subprocess.TimeoutExpired:
+        raise RuntimeError("LibreOffice conversion timed out.")
 
+    converted = output_dir / f"{input_path.stem}.{target}"
+
+    if result.returncode != 0 or not converted.exists():
         raise RuntimeError(
-            "LibreOffice conversion timed out."
+            f"Could not convert {input_path.suffix} file: "
+            f"{result.stderr.strip()}"
         )
 
-    except Exception as e:
+    return str(converted)
 
-        raise RuntimeError(
-            f"Unable to start LibreOffice: {e}"
+
+# ============================================================
+# OCR
+# ============================================================
+
+def _ocr_image(image) -> str:
+
+    import pytesseract
+
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+
+    # Upscale small images; tesseract does poorly below ~300 DPI.
+    if max(image.size) < 1500:
+        scale = 1500 / max(image.size)
+        image = image.resize(
+            (int(image.width * scale), int(image.height * scale))
         )
 
-    # Check LibreOffice result
-    if result.returncode != 0:
-
-        raise RuntimeError(
-            "DOC conversion failed.\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
-
-    # Expected DOCX path
-    converted_file = (
-        output_dir /
-        f"{input_path.stem}.docx"
-    )
-
-    if not converted_file.exists():
-
-        raise RuntimeError(
-            "LibreOffice did not create the DOCX file.\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
-
-    return str(converted_file)
+    return pytesseract.image_to_string(image)
 
 
 # ============================================================
@@ -166,79 +122,70 @@ def convert_doc_to_docx(file_path: str) -> str:
 
 def extract_pdf(file_path: str) -> dict:
 
+    from pypdf import PdfReader
+
     reader = PdfReader(file_path)
 
     pages = []
 
-    page_count = len(reader.pages)
+    for number, page in enumerate(reader.pages, start=1):
 
-    for page_number, page in enumerate(
-        reader.pages,
-        start=1,
-    ):
+        text = (page.extract_text() or "").strip()
 
-        text = page.extract_text() or ""
+        # Scanned page: fall back to OCR if tooling is available.
+        if len(text) < _PDF_OCR_THRESHOLD:
+            text = _ocr_pdf_page(file_path, number - 1) or text
 
-        if text.strip():
-
-            pages.append(
-                f"[Page {page_number}]\n{text}"
-            )
+        if text:
+            pages.append(f"[Page {number}]\n{text}")
 
     return {
         "file_type": "pdf",
-        "pages": page_count,
+        "pages": len(reader.pages),
         "text": "\n\n".join(pages),
     }
 
 
+def _ocr_pdf_page(file_path: str, index: int) -> str:
+
+    try:
+        import pypdfium2
+
+        pdf = pypdfium2.PdfDocument(file_path)
+        image = pdf[index].render(scale=2.5).to_pil()
+
+        return _ocr_image(image).strip()
+
+    except Exception:
+        return ""
+
+
 # ============================================================
-# DOCX
+# WORD
 # ============================================================
 
 def extract_docx(file_path: str) -> dict:
 
+    from docx import Document
+
     document = Document(file_path)
 
     sections = []
-
-    # --------------------------------------------------------
-    # Paragraphs
-    # --------------------------------------------------------
 
     for paragraph in document.paragraphs:
 
         text = paragraph.text.strip()
 
         if text:
-
             sections.append(text)
 
-    # --------------------------------------------------------
-    # Tables
-    # --------------------------------------------------------
+    for index, table in enumerate(document.tables, start=1):
 
-    for table_index, table in enumerate(
-        document.tables,
-        start=1,
-    ):
-
-        sections.append(
-            f"\n[Table {table_index}]"
-        )
+        sections.append(f"\n[Table {index}]")
 
         for row in table.rows:
-
-            row_values = []
-
-            for cell in row.cells:
-
-                row_values.append(
-                    cell.text.strip()
-                )
-
             sections.append(
-                " | ".join(row_values)
+                " | ".join(cell.text.strip() for cell in row.cells)
             )
 
     return {
@@ -249,72 +196,163 @@ def extract_docx(file_path: str) -> dict:
 
 
 # ============================================================
-# XLSX
+# EXCEL
 # ============================================================
 
 def extract_xlsx(file_path: str) -> dict:
 
+    from openpyxl import load_workbook
+
     workbook = load_workbook(
-        filename=file_path,
-        data_only=True,
+        filename=file_path, data_only=True, read_only=True
     )
 
     sections = []
 
     for worksheet in workbook.worksheets:
 
-        sections.append(
-            f"\n[Worksheet: {worksheet.title}]"
-        )
+        sections.append(f"\n[Worksheet: {worksheet.title}]")
 
-        for row in worksheet.iter_rows(
-            values_only=True
-        ):
+        for row in worksheet.iter_rows(values_only=True):
 
-            values = []
-
-            for value in row:
-
-                if value is not None:
-
-                    values.append(
-                        str(value)
-                    )
+            values = [str(v) for v in row if v is not None]
 
             if values:
+                sections.append(" | ".join(values))
 
-                sections.append(
-                    " | ".join(values)
-                )
+    workbook.close()
 
     return {
         "file_type": "xlsx",
-        "pages": None,
+        "pages": len(workbook.worksheets),
         "text": "\n".join(sections),
     }
 
 
 # ============================================================
-# IMAGE OCR
+# POWERPOINT
 # ============================================================
 
-def extract_image(file_path: str) -> dict:
+def extract_pptx(file_path: str) -> dict:
 
-    image = Image.open(file_path)
+    from pptx import Presentation
 
-    text = pytesseract.image_to_string(
-        image
-    )
+    presentation = Presentation(file_path)
+
+    slides = []
+
+    for number, slide in enumerate(presentation.slides, start=1):
+
+        parts = [f"[Slide {number}]"]
+
+        for shape in slide.shapes:
+
+            if shape.has_text_frame:
+                text = shape.text_frame.text.strip()
+                if text:
+                    parts.append(text)
+
+            if getattr(shape, "has_table", False) and shape.has_table:
+                for row in shape.table.rows:
+                    parts.append(
+                        " | ".join(
+                            cell.text.strip() for cell in row.cells
+                        )
+                    )
+
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+            if notes:
+                parts.append(f"Notes: {notes}")
+
+        if len(parts) > 1:
+            slides.append("\n".join(parts))
 
     return {
-        "file_type": "image",
-        "pages": None,
-        "text": text,
+        "file_type": "pptx",
+        "pages": len(presentation.slides),
+        "text": "\n\n".join(slides),
     }
 
 
 # ============================================================
-# UNIVERSAL FILE LOADER
+# HTML
+# ============================================================
+
+def extract_html(file_path: str) -> dict:
+
+    from bs4 import BeautifulSoup
+
+    raw = Path(file_path).read_bytes()
+
+    soup = BeautifulSoup(raw, "html.parser")
+
+    for tag in soup(["script", "style", "noscript", "template"]):
+        tag.decompose()
+
+    for table in soup.find_all("table"):
+
+        rows = [
+            " | ".join(
+                cell.get_text(" ", strip=True)
+                for cell in row.find_all(["th", "td"])
+            )
+            for row in table.find_all("tr")
+        ]
+
+        table.replace_with("\n[Table]\n" + "\n".join(rows) + "\n")
+
+    title = soup.title.get_text(strip=True) if soup.title else ""
+
+    body = soup.get_text("\n", strip=True)
+
+    text = f"{title}\n\n{body}" if title else body
+
+    return {"file_type": "html", "pages": None, "text": text}
+
+
+# ============================================================
+# PLAIN TEXT / CSV
+# ============================================================
+
+def extract_text(file_path: str) -> dict:
+
+    raw = Path(file_path).read_bytes()
+
+    # utf-16 only when a BOM says so (it otherwise "decodes" anything)
+    encodings = ["utf-8-sig", "cp1252", "latin-1"]
+
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.insert(0, "utf-16")
+
+    for encoding in encodings:
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeError:
+            continue
+
+    suffix = Path(file_path).suffix.lower().lstrip(".")
+
+    return {"file_type": suffix, "pages": None, "text": text}
+
+
+# ============================================================
+# IMAGES
+# ============================================================
+
+def extract_image(file_path: str) -> dict:
+
+    from PIL import Image
+
+    with Image.open(file_path) as image:
+        text = _ocr_image(image)
+
+    return {"file_type": "image", "pages": None, "text": text}
+
+
+# ============================================================
+# UNIVERSAL LOADER
 # ============================================================
 
 def extract_file_data(file_path: str) -> dict:
@@ -322,85 +360,45 @@ def extract_file_data(file_path: str) -> dict:
     path = Path(file_path)
 
     if not path.exists():
-
-        raise FileNotFoundError(
-            f"File not found: {file_path}"
-        )
+        raise FileNotFoundError(f"File not found: {file_path}")
 
     extension = path.suffix.lower()
 
-    # --------------------------------------------------------
-    # Validate extension
-    # --------------------------------------------------------
-
     if extension not in SUPPORTED_EXTENSIONS:
-
         raise ValueError(
-            f"Unsupported file type: {extension}. "
-            "Supported formats: "
-            "PDF, DOC, DOCX, XLSX, PNG, JPG, JPEG"
+            f"Unsupported file type: {extension}. Supported: "
+            + ", ".join(sorted(SUPPORTED_EXTENSIONS))
         )
 
-    # --------------------------------------------------------
-    # PDF
-    # --------------------------------------------------------
+    if extension in LEGACY_CONVERSIONS:
+
+        target = LEGACY_CONVERSIONS[extension]
+        converted = convert_with_libreoffice(file_path, target)
+
+        try:
+            data = globals()[f"extract_{target}"](converted)
+        finally:
+            shutil.rmtree(Path(converted).parent, ignore_errors=True)
+
+        data["file_type"] = extension.lstrip(".")
+        return data
 
     if extension == ".pdf":
-
-        return extract_pdf(
-            file_path
-        )
-
-    # --------------------------------------------------------
-    # Legacy DOC
-    # --------------------------------------------------------
-
-    if extension == ".doc":
-
-        converted_docx = (
-            convert_doc_to_docx(
-                file_path
-            )
-        )
-
-        return extract_docx(
-            converted_docx
-        )
-
-    # --------------------------------------------------------
-    # DOCX
-    # --------------------------------------------------------
+        return extract_pdf(file_path)
 
     if extension == ".docx":
-
-        return extract_docx(
-            file_path
-        )
-
-    # --------------------------------------------------------
-    # XLSX
-    # --------------------------------------------------------
+        return extract_docx(file_path)
 
     if extension == ".xlsx":
+        return extract_xlsx(file_path)
 
-        return extract_xlsx(
-            file_path
-        )
+    if extension == ".pptx":
+        return extract_pptx(file_path)
 
-    # --------------------------------------------------------
-    # Images
-    # --------------------------------------------------------
+    if extension in HTML_EXTENSIONS:
+        return extract_html(file_path)
 
-    if extension in {
-        ".png",
-        ".jpg",
-        ".jpeg",
-    }:
+    if extension in TEXT_EXTENSIONS:
+        return extract_text(file_path)
 
-        return extract_image(
-            file_path
-        )
-
-    raise ValueError(
-        f"Unsupported file extension: {extension}"
-    )
+    return extract_image(file_path)

@@ -9,6 +9,7 @@ services:
 
     environment:
       BACKEND_URL: http://backend:8000
+      DATA_DIR: /app/data
 
     volumes:
       - ./data:/app/data

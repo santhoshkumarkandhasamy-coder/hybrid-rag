@@ -1,141 +1,134 @@
-from pathlib import Path
-from uuid import uuid4
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
-
-from backend.ingestion.file_loader import (
-    extract_file_data,
-    SUPPORTED_EXTENSIONS,
+from backend.core import config
+from backend.core.db import audit, get_conn, storage_used_bytes
+from backend.core.deps import get_current_user, get_owned_document
+from backend.ingestion.file_loader import SUPPORTED_EXTENSIONS
+from backend.services.documents import (
+    delete_document,
+    document_dir,
+    ingest_upload,
 )
 
-from backend.ingestion.chunker import split_text
-from backend.ingestion.vector_store import (
-    create_vector_store,
-    save_vector_store,
-)
+router = APIRouter(prefix="/documents", tags=["Documents"])
 
-router = APIRouter(
-    prefix="/documents",
-    tags=["Documents"],
-)
-
-UPLOAD_DIR = Path("data/uploads")
-
-UPLOAD_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+MAX_FILES_PER_REQUEST = 20
 
 
+@router.get("/supported-types")
+def supported_types():
+    return {
+        "extensions": sorted(SUPPORTED_EXTENSIONS),
+        "max_file_mb": config.MAX_FILE_SIZE_MB,
+    }
+
+
+# Plain `def` so blocking ingestion runs in the threadpool.
 @router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...)
+def upload_documents(
+    files: list[UploadFile] = File(...),
+    user=Depends(get_current_user),
+):
+    """Upload one or many files. Each file is processed
+    independently and reported separately."""
+
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {MAX_FILES_PER_REQUEST} files per upload.",
+        )
+
+    results = []
+
+    for upload in files:
+        try:
+            result = ingest_upload(user, upload)
+            results.append({"status": "completed", **result})
+
+        except HTTPException as exc:
+            results.append(
+                {
+                    "status": "failed",
+                    "filename": upload.filename,
+                    "error": exc.detail,
+                }
+            )
+
+        except Exception as exc:
+            results.append(
+                {
+                    "status": "failed",
+                    "filename": upload.filename,
+                    "error": f"Ingestion failed: {exc}",
+                }
+            )
+
+    return {"results": results}
+
+
+@router.get("")
+def list_documents(user=Depends(get_current_user)):
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM documents WHERE owner_id = ? "
+            "ORDER BY created_at DESC",
+            (user["id"],),
+        ).fetchall()
+
+    return {
+        "documents": [dict(r) for r in rows],
+        "storage_used_bytes": storage_used_bytes(user["id"]),
+        "quota_bytes": user["quota_mb"] * 1024 * 1024,
+    }
+
+
+@router.get("/{document_id}/text")
+def document_text(document_id: str, user=Depends(get_current_user)):
+
+    doc = get_owned_document(document_id, user)
+
+    path = document_dir(doc["owner_id"], doc["id"]) / "text.txt"
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Text not found.")
+
+    return {
+        "filename": doc["filename"],
+        "text": path.read_text(encoding="utf-8"),
+    }
+
+
+@router.get("/{document_id}/download")
+def download_document(
+    document_id: str, user=Depends(get_current_user)
 ):
 
-    if not file.filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Filename is required.",
-        )
+    doc = get_owned_document(document_id, user)
 
-    extension = Path(file.filename).suffix.lower()
-
-    if extension not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported file type. "
-                "Supported formats: "
-                "PDF, DOCX, XLSX, PNG, JPG, JPEG"
-            ),
-        )
-
-    document_id = str(uuid4())
-
-    # Keep each document in its own folder
-    document_dir = UPLOAD_DIR / document_id
-    document_dir.mkdir(
-        parents=True,
-        exist_ok=True,
+    path = (
+        document_dir(doc["owner_id"], doc["id"]) / doc["filename"]
     )
 
-    safe_filename = Path(file.filename).name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File missing.")
 
-    file_path = document_dir / safe_filename
+    return FileResponse(path, filename=doc["filename"])
 
-    # Save uploaded file
-    contents = await file.read()
 
-    with open(file_path, "wb") as output_file:
-        output_file.write(contents)
+@router.delete("/{document_id}")
+def remove_document(document_id: str, user=Depends(get_current_user)):
 
-    try:
+    doc = get_owned_document(document_id, user)
 
-        # ---------------------------------
-        # Extract text
-        # ---------------------------------
+    delete_document(doc)
+    audit(user, "document.delete", f"{doc['filename']} ({doc['id']})")
 
-        extracted = extract_file_data(
-            str(file_path)
-        )
-
-        text = extracted["text"]
-
-        if not text.strip():
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "No readable text was found "
-                    "in the uploaded file."
-                ),
-            )
-
-        # ---------------------------------
-        # Chunk text
-        # ---------------------------------
-
-        chunks = split_text(text)
-
-        if not chunks:
-            raise HTTPException(
-                status_code=400,
-                detail="No text chunks were created.",
-            )
-
-        # ---------------------------------
-        # Create FAISS
-        # ---------------------------------
-
-        vector_store = create_vector_store(
-            chunks
-        )
-
-        save_vector_store(
-            vector_store,
-            document_id,
-        )
-
-        # ---------------------------------
-        # Response
-        # ---------------------------------
-
-        return {
-            "document_id": document_id,
-            "filename": safe_filename,
-            "file_type": extracted["file_type"],
-            "pages": extracted.get("pages"),
-            "characters": len(text),
-            "chunks": len(chunks),
-            "status": "completed",
-            "text": text,
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"Document ingestion failed: {str(e)}",
-        )
+    return {"deleted": document_id}

@@ -1,9 +1,12 @@
 from backend.graph.extractor import extract_graph_data
+from backend.ingestion.chunker import split_text
 from backend.graph.neo4j_store import (
     create_document,
     store_entities,
     store_relationships,
 )
+
+MAX_GRAPH_WINDOWS = 10
 
 
 def ingest_document_graph(
@@ -21,17 +24,41 @@ def ingest_document_graph(
     # 1. Extract entities and relationships
     # -----------------------------------------
 
-    extracted = extract_graph_data(text)
+    # Large documents are processed in windows so a single
+    # LLM call never exceeds the context limit.
+    entities = []
+    relationships = []
 
-    entities = extracted.get(
-        "entities",
-        [],
-    )
+    seen_entities = set()
+    seen_relationships = set()
 
-    relationships = extracted.get(
-        "relationships",
-        [],
-    )
+    for window in split_text(
+        text,
+        chunk_size=12000,
+        chunk_overlap=0,
+    )[:MAX_GRAPH_WINDOWS]:
+
+        extracted = extract_graph_data(window)
+
+        for entity in extracted.get("entities", []):
+
+            key = (entity.get("name"), entity.get("type"))
+
+            if entity.get("name") and key not in seen_entities:
+                seen_entities.add(key)
+                entities.append(entity)
+
+        for rel in extracted.get("relationships", []):
+
+            key = (
+                rel.get("source"),
+                rel.get("type"),
+                rel.get("target"),
+            )
+
+            if all(key) and key not in seen_relationships:
+                seen_relationships.add(key)
+                relationships.append(rel)
 
     # -----------------------------------------
     # 2. Create document node

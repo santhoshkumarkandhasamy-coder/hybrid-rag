@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 python-multipart
+PyJWT
 
 python-dotenv
 pydantic
@@ -11,6 +12,9 @@ python-docx
 openpyxl
 Pillow
 pytesseract
+pypdfium2
+python-pptx
+beautifulsoup4
 
 langchain
 langchain-core
@@ -26,7 +30,8 @@ torch
 
 neo4j
 
-streamlit
+streamlit>=1.50
+pandas
 pyvis
 
 requests

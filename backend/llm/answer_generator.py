@@ -95,7 +95,9 @@ Rules:
    "I could not find enough information
    in the uploaded document."
 
-4. Give a clear and concise answer.
+4. Give a clear and concise answer, and name the
+   source file(s) when more than one document
+   is involved.
 
 5. Combine vector and graph information when
    they support the same answer.
@@ -127,8 +129,12 @@ def generate_answer(
 
         if content.strip():
 
+            source_name = result.get("filename")
+
             vector_context_parts.append(
-                content
+                f"[Source: {source_name}]\n{content}"
+                if source_name
+                else content
             )
 
     vector_context = "\n\n".join(

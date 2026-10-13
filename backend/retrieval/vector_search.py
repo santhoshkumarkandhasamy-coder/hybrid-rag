@@ -1,7 +1,3 @@
-from backend.ingestion.vector_store import (
-    load_vector_store,
-)
-
 
 def search_vector_store(
     document_id: str,
@@ -18,6 +14,11 @@ def search_vector_store(
             "Search query cannot be empty."
         )
 
+
+    # Imported lazily: loads torch / embedding models.
+    from backend.ingestion.vector_store import (
+        load_vector_store,
+    )
 
     # ==========================================
     # Load Document-Specific FAISS Index
@@ -52,6 +53,8 @@ def search_vector_store(
             {
                 "content": document.page_content,
                 "score": float(score),
+                "document_id": document_id,
+                "filename": document.metadata.get("filename"),
             }
         )
 

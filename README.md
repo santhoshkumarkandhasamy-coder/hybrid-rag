@@ -531,3 +531,33 @@ Choose and add a license before distributing this project publicly.
 **Graph Database:** Neo4j  
 **RAG Framework:** LangChain  
 **LLM Integration:** OpenAI
+
+## Multi-user, secure edition
+
+- **Accounts & roles:** username/password login (scrypt hashes, signed
+  expiring tokens, lockout after repeated failures). Roles: `admin`, `user`.
+- **Formats:** PDF (scanned pages fall back to OCR), Word (`doc`, `docx`),
+  Excel (`xls`, `xlsx`, `csv`), PowerPoint (`ppt`, `pptx`), HTML, text/Markdown,
+  and images (PNG/JPG/TIFF/BMP/WebP via OCR).
+- **Multiple files & storage:** upload many files at once; each user has a
+  private library with a storage quota (default 500 MB) and per-file size cap.
+- **Isolation:** users can only list, read, chat with or delete their own
+  documents. Admins can manage/delete any file but cannot read its content.
+- **Dashboard:** per-user usage, file types, recent uploads.
+- **Admin control panel:** create/disable/delete users, change roles, set
+  quotas, reset passwords, view all documents, audit log, toggle self sign-up.
+- **Hybrid chat across many documents:** vector + graph results are merged
+  and the answer cites source files. If Neo4j is down, uploads still work
+  (vector-only) and a warning is shown.
+
+### First run
+
+```bash
+cp .env.example .env   # set ADMIN_PASSWORD, OPENAI_*, NEO4J_*
+uvicorn backend.main:app --reload          # API on :8000
+streamlit run frontend/app.py               # UI on :8501
+```
+
+Sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`. If `ADMIN_PASSWORD` is unset,
+a random one is printed once in the backend log. Run tests with `pytest`.
+Put the app behind HTTPS (reverse proxy) in production.

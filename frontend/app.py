@@ -1,16 +1,10 @@
-import os
-from pathlib import Path
-from html import escape
-
-import requests
+import pandas as pd
 import streamlit as st
-from pyvis.network import Network
 import streamlit.components.v1 as components
 
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
+import api
+from api import ApiError
+from graph_view import create_graph_html
 
 st.set_page_config(
     page_title="AKSAN INTELLIGENCE - Hybrid RAG",
@@ -19,1161 +13,579 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
-# ============================================================
-# BACKEND URL
-# ============================================================
-
-# Local:
-# BACKEND_URL=http://127.0.0.1:8000
-#
-# Docker:
-# BACKEND_URL=http://backend:8000
-
-BACKEND_URL = os.getenv(
-    "BACKEND_URL",
-    "http://127.0.0.1:8000",
-).rstrip("/")
-
-
-# ============================================================
-# SUPPORTED FILE TYPES
-# ============================================================
-
-SUPPORTED_FILE_TYPES = [
-    "pdf",
-    "doc",
-    "docx",
-    "xlsx",
-    "png",
-    "jpg",
-    "jpeg",
+SUPPORTED_TYPES = [
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "html", "htm", "txt", "md", "csv",
+    "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
 ]
 
 
-SUPPORTED_FILE_LABEL = (
-    "PDF, DOCX, XLSX, PNG, JPG, JPEG"
-)
+def fmt_bytes(n: float) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def show_error(exc: ApiError):
+    st.error(exc.detail)
 
 
 # ============================================================
-# SESSION STATE
+# LOGIN
 # ============================================================
 
-if "document_id" not in st.session_state:
-    st.session_state.document_id = None
+def login_page():
 
-if "filename" not in st.session_state:
-    st.session_state.filename = None
+    st.title("🧠 AKSAN INTELLIGENCE")
+    st.caption("Secure Hybrid RAG · Vector Search + Knowledge Graph")
 
-if "file_type" not in st.session_state:
-    st.session_state.file_type = None
-
-if "ingestion_complete" not in st.session_state:
-    st.session_state.ingestion_complete = False
-
-if "upload_response" not in st.session_state:
-    st.session_state.upload_response = None
-
-if "graph_response" not in st.session_state:
-    st.session_state.graph_response = None
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
-def check_backend_health():
-    """Check whether FastAPI backend is available."""
+    if st.session_state.pop("flash", None):
+        st.warning("Session expired. Please sign in.")
 
     try:
-        response = requests.get(
-            f"{BACKEND_URL}/health",
-            timeout=10,
+        allow_signup = api.get("/auth/config")["allow_signup"]
+    except ApiError as exc:
+        st.error(exc.detail)
+        st.stop()
+
+    _, centre, _ = st.columns([1, 2, 1])
+
+    with centre:
+        tabs = st.tabs(
+            ["Sign in", "Create account"] if allow_signup else ["Sign in"]
         )
 
-        if response.status_code == 200:
-            return True, response.json()
+        with tabs[0]:
+            with st.form("login"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button(
+                    "Sign in", type="primary", width="stretch"
+                )
 
-        return False, {
-            "status": response.status_code,
-            "message": response.text,
-        }
+            if submitted:
+                try:
+                    data = api.post(
+                        "/auth/login",
+                        json={"username": username, "password": password},
+                    )
+                    st.session_state.token = data["access_token"]
+                    st.session_state.user = data["user"]
+                    st.rerun()
+                except ApiError as exc:
+                    show_error(exc)
 
-    except requests.exceptions.RequestException as e:
-        return False, {
-            "status": "offline",
-            "message": str(e),
-        }
+        if allow_signup:
+            with tabs[1]:
+                with st.form("register"):
+                    new_user = st.text_input("Choose a username")
+                    new_pass = st.text_input(
+                        "Choose a password", type="password",
+                        help="At least 8 characters with letters and numbers.",
+                    )
+                    confirm = st.text_input(
+                        "Confirm password", type="password"
+                    )
+                    created = st.form_submit_button(
+                        "Create account", width="stretch"
+                    )
 
-
-def upload_document(uploaded_file):
-    """Upload document to FastAPI backend."""
-
-    try:
-
-        files = {
-            "file": (
-                uploaded_file.name,
-                uploaded_file.getvalue(),
-                uploaded_file.type,
-            )
-        }
-
-        response = requests.post(
-            f"{BACKEND_URL}/documents/upload",
-            files=files,
-            timeout=600,
-        )
-
-        return response
-
-    except requests.exceptions.RequestException as e:
-
-        st.error(
-            f"Unable to connect to backend: {e}"
-        )
-
-        return None
-
-
-def ingest_graph(document_id, filename, text):
-    """Send extracted text to Neo4j graph ingestion."""
-
-    try:
-
-        response = requests.post(
-            f"{BACKEND_URL}/graph/ingest",
-            json={
-                "document_id": document_id,
-                "filename": filename,
-                "text": text,
-            },
-            timeout=600,
-        )
-
-        return response
-
-    except requests.exceptions.RequestException as e:
-
-        st.error(
-            f"Unable to connect to graph service: {e}"
-        )
-
-        return None
-
-
-def get_document_graph(document_id):
-    """Get Neo4j graph for a document."""
-
-    try:
-
-        response = requests.get(
-            f"{BACKEND_URL}/graph/{document_id}",
-            timeout=60,
-        )
-
-        if response.status_code == 200:
-            return response.json()
-
-        return None
-
-    except requests.exceptions.RequestException:
-        return None
-
-
-def ask_chat(
-    document_id,
-    question,
-    top_k=5,
-):
-    """Ask hybrid RAG chat endpoint."""
-
-    try:
-
-        response = requests.post(
-            f"{BACKEND_URL}/chat",
-            json={
-                "document_id": document_id,
-                "query": question,
-                "vector_top_k": top_k,
-                "graph_limit": top_k,
-            },
-            timeout=600,
-        )
-
-        return response
-
-    except requests.exceptions.RequestException as e:
-
-        st.error(
-            f"Unable to connect to chat service: {e}"
-        )
-
-        return None
-
-
-def create_graph_html(graph_data):
-    """Create PyVis HTML visualization."""
-
-    network = Network(
-        height="600px",
-        width="100%",
-        bgcolor="#ffffff",
-        font_color="#000000",
-        directed=True,
-    )
-
-    network.set_options(
-        """
-        {
-          "nodes": {
-            "shape": "dot",
-            "size": 20,
-            "font": {
-              "size": 14
-            }
-          },
-          "edges": {
-            "arrows": {
-              "to": {
-                "enabled": true
-              }
-            },
-            "font": {
-              "size": 10,
-              "align": "middle"
-            },
-            "smooth": {
-              "enabled": true
-            }
-          },
-          "physics": {
-            "enabled": true,
-            "stabilization": {
-              "iterations": 200
-            }
-          }
-        }
-        """
-    )
-
-    entities = graph_data.get(
-        "entities",
-        [],
-    )
-
-    relationships = graph_data.get(
-        "relationships",
-        [],
-    )
-
-    # --------------------------------------------------------
-    # Add entities
-    # --------------------------------------------------------
-
-    for entity in entities:
-
-        name = entity.get(
-            "name",
-            "Unknown",
-        )
-
-        entity_type = entity.get(
-            "type",
-            "Entity",
-        )
-
-        network.add_node(
-            name,
-            label=name,
-            title=f"Type: {entity_type}",
-        )
-
-    # --------------------------------------------------------
-    # Add relationships
-    # --------------------------------------------------------
-
-    for relationship in relationships:
-
-        source = relationship.get(
-            "source"
-        )
-
-        target = relationship.get(
-            "target"
-        )
-
-        relation_type = relationship.get(
-            "type",
-            "RELATES_TO",
-        )
-
-        if source and target:
-
-            network.add_edge(
-                source,
-                target,
-                label=relation_type,
-                title=relation_type,
-            )
-
-    return network.generate_html()
+                if created:
+                    if new_pass != confirm:
+                        st.error("Passwords do not match.")
+                    else:
+                        try:
+                            api.post(
+                                "/auth/register",
+                                json={"username": new_user,
+                                      "password": new_pass},
+                            )
+                            st.success("Account created. Please sign in.")
+                        except ApiError as exc:
+                            show_error(exc)
 
 
 # ============================================================
-# HEADER
+# USER PAGES
 # ============================================================
 
-st.title("🧠 AKSAN INTELLIGENCE - Hybrid RAG")
-
-st.markdown(
-    """
-    ### Vector Search + Knowledge Graph + LLM
-
-    Upload a document, build the knowledge graph and vector
-    database, and then ask questions using Hybrid RAG.
-    """
-)
+def load_documents():
+    return api.get("/documents")
 
 
-# ============================================================
-# SIDEBAR
-# ============================================================
+def dashboard_page():
 
-with st.sidebar:
+    st.header("📊 Dashboard")
 
-    st.header("⚙️ Settings")
+    data = load_documents()
+    docs = data["documents"]
+    used, quota = data["storage_used_bytes"], data["quota_bytes"]
 
-    st.write("Backend URL")
-
-    st.code(
-        BACKEND_URL,
-        language="text",
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Documents", len(docs))
+    c2.metric("Storage used", fmt_bytes(used))
+    c3.metric("Text chunks", sum(d["chunks"] or 0 for d in docs))
+    c4.metric(
+        "Graph entities", sum(d["entities"] or 0 for d in docs)
     )
 
-    st.divider()
-
-    top_k = st.slider(
-        "Number of search results",
-        min_value=1,
-        max_value=10,
-        value=5,
+    st.progress(
+        min(used / quota, 1.0) if quota else 0.0,
+        text=f"Storage: {fmt_bytes(used)} of {fmt_bytes(quota)}",
     )
 
-    st.divider()
+    if not docs:
+        st.info("No documents yet. Open **My Documents** to upload files.")
+        return
 
-    st.subheader("📄 Supported Files")
+    left, right = st.columns([1, 2])
 
-    st.write(
-    """
-    • PDF
-    • DOC
-    • DOCX
-    • XLSX
-    • PNG
-    • JPG
-    • JPEG
-    """
- )
+    df = pd.DataFrame(docs)
 
-    st.divider()
+    with left:
+        st.subheader("By file type")
+        st.bar_chart(df.groupby("file_type").size())
 
-    if st.session_state.document_id:
-
-        st.subheader("Current Document")
-
-        st.write(
-            st.session_state.filename
-        )
-
-        st.caption(
-            f"ID: {st.session_state.document_id}"
+    with right:
+        st.subheader("Recent uploads")
+        st.dataframe(
+            df[["filename", "file_type", "size_bytes", "chunks",
+                "created_at"]].head(10),
+            hide_index=True,
+            width="stretch",
         )
 
 
-# ============================================================
-# BACKEND STATUS
-# ============================================================
+def documents_page():
 
-st.subheader("🔌 Backend Status")
+    st.header("📁 My Documents")
 
-backend_online, backend_info = check_backend_health()
+    info = api.get("/documents/supported-types")
 
-if backend_online:
-
-    st.success(
-        "FastAPI backend is connected."
+    st.subheader("Upload")
+    files = st.file_uploader(
+        f"Add one or more files (max {info['max_file_mb']} MB each)",
+        type=SUPPORTED_TYPES,
+        accept_multiple_files=True,
+        key=f"uploader_{st.session_state.get('upload_round', 0)}",
     )
 
-else:
-
-    st.error(
-        "FastAPI backend is not reachable."
-    )
-
-    st.code(
-        BACKEND_URL,
-        language="text",
-    )
-
-    st.warning(
-        "Start the FastAPI backend before uploading files."
-    )
-
-
-# ============================================================
-# FILE UPLOAD
-# ============================================================
-
-st.divider()
-
-st.header("📤 Upload Document")
-
-st.write(
-    "Upload a document to start the Hybrid RAG pipeline."
-)
-
-uploaded_file = st.file_uploader(
-    "Choose a file",
-    type=SUPPORTED_FILE_TYPES,
-    help=(
-        "Supported formats: "
-        + SUPPORTED_FILE_LABEL
-    ),
-)
-
-
-# ============================================================
-# SHOW SELECTED FILE
-# ============================================================
-
-if uploaded_file:
-
-    extension = Path(
-        uploaded_file.name
-    ).suffix.lower()
-
-    st.info(
-        f"Selected file: **{uploaded_file.name}** "
-        f"({extension.upper()})"
-    )
-
-    st.write(
-        f"File size: "
-        f"{uploaded_file.size / 1024:.2f} KB"
-    )
-
-
-# ============================================================
-# INGEST BUTTON
-# ============================================================
-
-if uploaded_file and backend_online:
-
-    if st.button(
-        "🚀 Start Ingestion",
-        type="primary",
-        use_container_width=True,
+    if files and st.button(
+        f"🚀 Ingest {len(files)} file(s)", type="primary"
     ):
-
-        # Reset previous state
-
-        st.session_state.document_id = None
-        st.session_state.filename = None
-        st.session_state.file_type = None
-        st.session_state.ingestion_complete = False
-        st.session_state.upload_response = None
-        st.session_state.graph_response = None
-        st.session_state.chat_history = []
-
-        # ----------------------------------------------------
-        # Progress
-        # ----------------------------------------------------
-
-        progress = st.progress(0)
-
-        status_text = st.empty()
-
-        # ====================================================
-        # STEP 1 - FILE + FAISS
-        # ====================================================
-
-        status_text.info(
-            "Step 1/2: Uploading file and creating FAISS index..."
-        )
-
-        progress.progress(10)
-
-        upload_response = upload_document(
-            uploaded_file
-        )
-
-        if upload_response is None:
-
-            progress.empty()
-            status_text.error(
-                "Upload failed."
-            )
-            st.stop()
-
-        if upload_response.status_code != 200:
-
-            progress.empty()
-            status_text.error(
-                "Document ingestion failed."
-            )
-
+        with st.spinner("Reading files, building vector index and graph…"):
             try:
-                error_data = upload_response.json()
+                result = api.post(
+                    "/documents/upload",
+                    files=[
+                        ("files", (f.name, f.getvalue(), f.type))
+                        for f in files
+                    ],
+                    timeout=1800,
+                )
+            except ApiError as exc:
+                show_error(exc)
+                result = None
 
-                st.error(
-                    error_data.get(
-                        "detail",
-                        "Unknown backend error.",
+        if result:
+            for item in result["results"]:
+                if item["status"] == "completed":
+                    st.success(
+                        f"✅ {item['filename']} — {item['chunks']} chunks, "
+                        f"{item['entities']} entities"
                     )
-                )
+                    if item.get("warning"):
+                        st.warning(item["warning"])
+                else:
+                    st.error(f"❌ {item['filename']}: {item['error']}")
 
-            except Exception:
-
-                st.error(
-                    upload_response.text
-                )
-
-            st.stop()
-
-        upload_data = upload_response.json()
-
-        st.session_state.upload_response = upload_data
-
-        document_id = upload_data.get(
-            "document_id"
-        )
-
-        st.session_state.document_id = document_id
-
-        st.session_state.filename = upload_data.get(
-            "filename",
-            uploaded_file.name,
-        )
-
-        st.session_state.file_type = upload_data.get(
-            "file_type",
-            Path(uploaded_file.name)
-            .suffix
-            .lower(),
-        )
-
-        progress.progress(50)
-
-        status_text.success(
-            "FAISS ingestion completed."
-        )
-
-        # ====================================================
-        # STEP 2 - KNOWLEDGE GRAPH
-        # ====================================================
-
-        status_text.info(
-            "Step 2/2: Extracting entities and relationships into Neo4j..."
-        )
-
-        progress.progress(60)
-
-        extracted_text = upload_data.get(
-            "text",
-            "",
-        )
-
-        if not extracted_text:
-
-            progress.empty()
-
-            status_text.warning(
-                "FAISS ingestion completed, but extracted text "
-                "was not returned by the upload API."
+            st.session_state.upload_round = (
+                st.session_state.get("upload_round", 0) + 1
             )
-
-            st.warning(
-                "Your backend upload endpoint needs to return "
-                "`text` for the current /graph/ingest API."
-            )
-
-            st.stop()
-
-        # ----------------------------------------------------
-        # Send document + filename + text to Neo4j
-        # ----------------------------------------------------
-
-        graph_response = ingest_graph(
-            document_id=document_id,
-            filename=st.session_state.filename,
-            text=extracted_text,
-        )
-
-        if graph_response is None:
-
-            progress.empty()
-
-            status_text.error(
-                "Neo4j graph ingestion failed."
-            )
-
-            st.stop()
-
-        if graph_response.status_code not in [
-            200,
-            201,
-        ]:
-
-            progress.empty()
-
-            status_text.error(
-                "Neo4j graph ingestion failed."
-            )
-
-            try:
-
-                graph_error = graph_response.json()
-
-                st.error(
-                    graph_error.get(
-                        "detail",
-                        "Unknown graph error.",
-                    )
-                )
-
-            except Exception:
-
-                st.error(
-                    graph_response.text
-                )
-
-            st.stop()
-
-        graph_data = graph_response.json()
-
-        st.session_state.graph_response = graph_data
-
-        progress.progress(100)
-
-        status_text.success(
-            "Knowledge graph ingestion completed."
-        )
-
-        # ====================================================
-        # COMPLETE
-        # ====================================================
-
-        st.session_state.ingestion_complete = True
-
-        st.success(
-            "🎉 Document ingestion completed successfully!"
-        )
-
-        st.info(
-            "💬 Hybrid RAG chat is now enabled."
-        )
-
-        st.rerun()
-
-        # ====================================================
-        # COMPLETE
-        # ====================================================
-
-        st.session_state.ingestion_complete = True
-
-        st.success(
-            "🎉 Document ingestion completed successfully!"
-        )
-
-        st.info(
-            "💬 Hybrid RAG chat is now enabled."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# INGESTION SUMMARY
-# ============================================================
-
-if st.session_state.upload_response:
 
     st.divider()
+    st.subheader("Library")
 
-    st.header("📊 Document Overview")
+    data = load_documents()
 
-    data = st.session_state.upload_response
+    if not data["documents"]:
+        st.info("Your library is empty.")
+        return
 
-    col1, col2, col3, col4 = st.columns(4)
+    st.caption(
+        f"{fmt_bytes(data['storage_used_bytes'])} of "
+        f"{fmt_bytes(data['quota_bytes'])} used"
+    )
 
-    with col1:
+    for doc in data["documents"]:
+        with st.expander(
+            f"{doc['filename']} · {doc['file_type']} · "
+            f"{fmt_bytes(doc['size_bytes'])}"
+        ):
+            st.caption(
+                f"Uploaded {doc['created_at'][:19]} · "
+                f"{doc['characters']:,} characters · "
+                f"{doc['chunks']} chunks · {doc['entities']} entities · "
+                f"{doc['relationships']} relationships"
+            )
+            if doc.get("error"):
+                st.warning(doc["error"])
 
-        st.metric(
-            "File",
-            data.get(
-                "filename",
-                "-",
-            ),
-        )
+            a, b, c = st.columns(3)
 
-    with col2:
+            if a.button("👁 Preview text", key=f"pv{doc['id']}"):
+                text = api.get(f"/documents/{doc['id']}/text")["text"]
+                st.text_area(
+                    "Extracted text", text[:20000], height=250,
+                    key=f"txt{doc['id']}",
+                )
 
-        st.metric(
-            "Type",
-            data.get(
-                "file_type",
-                "-",
-            ).upper(),
-        )
+            try:
+                raw = api.call(
+                    "GET", f"/documents/{doc['id']}/download"
+                ).content
+                b.download_button(
+                    "⬇ Download", raw, file_name=doc["filename"],
+                    key=f"dl{doc['id']}",
+                )
+            except ApiError:
+                b.caption("file unavailable")
 
-    with col3:
+            if c.button("🗑 Delete", key=f"rm{doc['id']}"):
+                api.delete(f"/documents/{doc['id']}")
+                st.rerun()
 
-        st.metric(
-            "Characters",
-            f"{data.get('characters', 0):,}",
-        )
 
-    with col4:
+def chat_page():
 
-        st.metric(
-            "Chunks",
-            data.get(
-                "chunks",
-                0,
-            ),
-        )
+    st.header("💬 Hybrid RAG Chat")
 
-    if data.get("pages"):
+    docs = load_documents()["documents"]
 
-        st.caption(
-            f"Pages: {data.get('pages')}"
-        )
+    if not docs:
+        st.info("Upload documents first.")
+        return
 
-# ============================================================
-# KNOWLEDGE GRAPH
-# ============================================================
+    labels = {d["id"]: d["filename"] for d in docs}
 
-if (
-    st.session_state.document_id
-    and st.session_state.ingestion_complete
-):
+    selected = st.multiselect(
+        "Documents to search (empty = all)",
+        options=list(labels),
+        format_func=labels.get,
+    )
+    top_k = st.slider("Results per source", 1, 10, 5)
 
-    st.divider()
+    history = st.session_state.setdefault("chat_history", [])
+
+    for msg in history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("sources"):
+                st.caption("Sources: " + ", ".join(msg["sources"]))
+
+    question = st.chat_input("Ask a question about your documents…")
+
+    if not question:
+        return
+
+    history.append({"role": "user", "content": question})
+
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Searching vectors + knowledge graph…"):
+            try:
+                reply = api.post(
+                    "/chat",
+                    json={"query": question,
+                          "document_ids": selected or None,
+                          "top_k": top_k},
+                    timeout=180,
+                )
+                answer, sources = reply["answer"], reply["sources"]
+                st.markdown(answer)
+                if sources:
+                    st.caption("Sources: " + ", ".join(sources))
+                st.caption(
+                    f"Vector hits: {reply['vector_result_count']} · "
+                    f"Graph hits: {reply['graph_result_count']}"
+                )
+            except ApiError as exc:
+                answer, sources = f"⚠️ {exc.detail}", []
+                st.error(answer)
+
+    history.append(
+        {"role": "assistant", "content": answer, "sources": sources}
+    )
+
+
+def graph_page():
 
     st.header("🕸️ Knowledge Graph")
 
-    with st.spinner(
-        "Loading knowledge graph..."
-    ):
+    docs = load_documents()["documents"]
 
-        graph_data = get_document_graph(
-            st.session_state.document_id
+    if not docs:
+        st.info("Upload documents first.")
+        return
+
+    labels = {d["id"]: d["filename"] for d in docs}
+    doc_id = st.selectbox(
+        "Document", list(labels), format_func=labels.get
+    )
+
+    try:
+        graph = api.get(f"/graph/{doc_id}")
+    except ApiError as exc:
+        show_error(exc)
+        return
+
+    entities = graph.get("entities", [])
+    relationships = graph.get("relationships", [])
+
+    a, b = st.columns(2)
+    a.metric("Entities", len(entities))
+    b.metric("Relationships", len(relationships))
+
+    if entities:
+        components.html(
+            create_graph_html(graph), height=650, scrolling=True
         )
-
-    if graph_data:
-
-        entities = graph_data.get(
-            "entities",
-            [],
-        )
-
-        relationships = graph_data.get(
-            "relationships",
-            [],
-        )
-
-        # ----------------------------------------------------
-        # Graph statistics
-        # ----------------------------------------------------
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.metric(
-                "Entities",
-                len(entities),
-            )
-
-        with col2:
-
-            st.metric(
-                "Relationships",
-                len(relationships),
-            )
-
-        # ----------------------------------------------------
-        # Entity table
-        # ----------------------------------------------------
-
-        if entities:
-
-            st.subheader(
-                "🔹 Entities"
-            )
-
-            entity_rows = []
-
-            for entity in entities:
-
-                entity_rows.append(
-                    {
-                        "Entity": entity.get(
-                            "name",
-                            "",
-                        ),
-                        "Type": entity.get(
-                            "type",
-                            "",
-                        ),
-                    }
-                )
-
-            entity_table = """
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">
-                            Entity
-                        </th>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">
-                            Type
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
-
-            for row in entity_rows:
-
-                entity_table += f"""
-                    <tr>
-                        <td style="padding:8px; border-bottom:1px solid #eee;">
-                            {escape(str(row["Entity"]))}
-                        </td>
-                        <td style="padding:8px; border-bottom:1px solid #eee;">
-                            {escape(str(row["Type"]))}
-                        </td>
-                    </tr>
-                """
-
-            entity_table += """
-                </tbody>
-            </table>
-            """
-
-            st.markdown(
-                entity_table,
-                unsafe_allow_html=True,
-            )
-
-        # ----------------------------------------------------
-        # Relationship table
-        # ----------------------------------------------------
-
+        t1, t2 = st.tabs(["Entities", "Relationships"])
+        t1.dataframe(pd.DataFrame(entities), hide_index=True,
+                     width="stretch")
         if relationships:
-
-            st.subheader(
-                "🔗 Relationships"
-            )
-
-            relationship_rows = []
-
-            for relationship in relationships:
-
-                relationship_rows.append(
-                    {
-                        "Source": relationship.get(
-                            "source",
-                            "",
-                        ),
-                        "Relationship": relationship.get(
-                            "type",
-                            "",
-                        ),
-                        "Target": relationship.get(
-                            "target",
-                            "",
-                        ),
-                    }
-                )
-
-            relationship_table = """
-            <table style="width:100%; border-collapse:collapse;">
-                <thead>
-                    <tr>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">
-                            Source
-                        </th>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">
-                            Relationship
-                        </th>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">
-                            Target
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
-
-            for row in relationship_rows:
-
-                relationship_table += f"""
-                    <tr>
-                        <td style="padding:8px; border-bottom:1px solid #eee;">
-                            {escape(str(row["Source"]))}
-                        </td>
-                        <td style="padding:8px; border-bottom:1px solid #eee;">
-                            {escape(str(row["Relationship"]))}
-                        </td>
-                        <td style="padding:8px; border-bottom:1px solid #eee;">
-                            {escape(str(row["Target"]))}
-                        </td>
-                    </tr>
-                """
-
-            relationship_table += """
-                </tbody>
-            </table>
-            """
-
-            st.markdown(
-                relationship_table,
-                unsafe_allow_html=True,
-            )
-
-        # ----------------------------------------------------
-        # Interactive graph
-        # ----------------------------------------------------
-
-        if entities:
-
-            st.subheader(
-                "🌐 Interactive Graph"
-            )
-
-            graph_html = create_graph_html(
-                graph_data
-            )
-
-            components.html(
-                graph_html,
-                height=650,
-                scrolling=True,
-            )
-
+            t2.dataframe(pd.DataFrame(relationships), hide_index=True,
+                         width="stretch")
     else:
+        st.info("No graph data for this document.")
 
-        st.warning(
-            "Knowledge graph data could not be loaded."
-        )
 
+def account_page():
+
+    st.header("👤 Account")
+
+    user = st.session_state.user
+    st.write(f"**Username:** {user['username']}")
+    st.write(f"**Role:** {user['role']}")
+    st.write(f"**Storage quota:** {user['quota_mb']} MB")
+
+    st.subheader("Change password")
+
+    with st.form("pw"):
+        current = st.text_input("Current password", type="password")
+        new = st.text_input("New password", type="password")
+        confirm = st.text_input("Confirm new password", type="password")
+        go = st.form_submit_button("Update password")
+
+    if go:
+        if new != confirm:
+            st.error("Passwords do not match.")
+        else:
+            try:
+                data = api.post(
+                    "/auth/change-password",
+                    json={"current_password": current,
+                          "new_password": new},
+                )
+                st.session_state.token = data["access_token"]
+                st.success("Password updated.")
+            except ApiError as exc:
+                show_error(exc)
 
 
 # ============================================================
-# CHAT
+# ADMIN CONTROL PANEL
 # ============================================================
 
-st.divider()
+def admin_page():
 
-st.header("💬 Hybrid RAG Chat")
+    st.header("🛡️ Admin Control Panel")
 
-
-if not st.session_state.ingestion_complete:
-
-    st.info(
-        "🔒 Chat is disabled. "
-        "Upload and ingest a document first."
+    overview, users_tab, docs_tab, audit_tab, settings_tab = st.tabs(
+        ["Overview", "Users", "All documents", "Audit log", "Settings"]
     )
 
-else:
+    with overview:
+        stats = api.get("/admin/stats")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Users", stats["users"]["total"])
+        c2.metric("Admins", stats["users"]["admins"] or 0)
+        c3.metric("Documents", stats["documents"]["total"])
+        c4.metric("Storage", fmt_bytes(stats["documents"]["bytes"]))
+        c5.metric("Chat queries", stats["chat_queries"])
 
-    st.success(
-        "🟢 Chat is enabled."
-    )
-
-    st.caption(
-        "Answers are generated using both "
-        "FAISS vector search and Neo4j knowledge graph."
-    )
-
-    # --------------------------------------------------------
-    # Display previous messages
-    # --------------------------------------------------------
-
-    for message in st.session_state.chat_history:
-
-        with st.chat_message(
-            message["role"]
-        ):
-
-            st.markdown(
-                message["content"]
+        left, right = st.columns(2)
+        if stats["per_user"]:
+            df = pd.DataFrame(stats["per_user"])
+            df["used_mb"] = df["bytes"] / 1024 / 1024
+            left.subheader("Storage per user (MB)")
+            left.bar_chart(df.set_index("username")["used_mb"])
+        if stats["by_type"]:
+            right.subheader("Documents by type")
+            right.bar_chart(
+                pd.DataFrame(stats["by_type"]).set_index("file_type")
             )
 
-    # --------------------------------------------------------
-    # Chat input
-    # --------------------------------------------------------
+    with users_tab:
+        users = api.get("/admin/users")["users"]
 
-    question = st.chat_input(
-        "Ask a question about your document..."
-    )
-
-    if question:
-
-        # ----------------------------------------------------
-        # User message
-        # ----------------------------------------------------
-
-        st.session_state.chat_history.append(
-            {
-                "role": "user",
-                "content": question,
-            }
+        df = pd.DataFrame(users)
+        df["storage"] = df["storage_bytes"].map(fmt_bytes)
+        st.dataframe(
+            df[["id", "username", "role", "is_active", "documents",
+                "storage", "quota_mb", "last_login"]],
+            hide_index=True, width="stretch",
         )
 
-        with st.chat_message("user"):
-
-            st.markdown(question)
-
-        # ----------------------------------------------------
-        # Assistant response
-        # ----------------------------------------------------
-
-        with st.chat_message(
-            "assistant"
-        ):
-
-            with st.spinner(
-                "Searching FAISS + Neo4j and generating answer..."
-            ):
-
-                response = ask_chat(
-                    document_id=(
-                        st.session_state.document_id
-                    ),
-                    question=question,
-                    top_k=top_k,
-                )
-
-            if response is None:
-
-                answer = (
-                    "Unable to connect to the "
-                    "chat backend."
-                )
-
-                st.error(answer)
-
-            elif response.status_code != 200:
-
+        st.subheader("Create user")
+        with st.form("create_user", clear_on_submit=True):
+            c1, c2, c3, c4 = st.columns(4)
+            name = c1.text_input("Username")
+            pw = c2.text_input("Password", type="password")
+            role = c3.selectbox("Role", ["user", "admin"])
+            quota = c4.number_input("Quota (MB)", 1, 100000, 500)
+            if st.form_submit_button("Create"):
                 try:
-
-                    error_data = response.json()
-
-                    answer = error_data.get(
-                        "detail",
-                        "Chat request failed.",
+                    api.post(
+                        "/admin/users",
+                        json={"username": name, "password": pw,
+                              "role": role, "quota_mb": int(quota)},
                     )
+                    st.success(f"Created {name}.")
+                    st.rerun()
+                except ApiError as exc:
+                    show_error(exc)
 
-                except Exception:
+        st.subheader("Manage user")
+        by_name = {u["username"]: u for u in users}
+        target = by_name[st.selectbox("User", list(by_name))]
 
-                    answer = response.text
+        with st.form("edit_user"):
+            c1, c2, c3 = st.columns(3)
+            new_role = c1.selectbox(
+                "Role", ["user", "admin"],
+                index=0 if target["role"] == "user" else 1,
+            )
+            active = c2.checkbox("Active", value=target["is_active"])
+            new_quota = c3.number_input(
+                "Quota (MB)", 1, 100000, int(target["quota_mb"])
+            )
+            new_pw = st.text_input(
+                "Reset password (leave blank to keep)", type="password"
+            )
+            save = st.form_submit_button("Save changes", type="primary")
 
-                st.error(answer)
+        if save:
+            body = {"role": new_role, "is_active": active,
+                    "quota_mb": int(new_quota)}
+            if new_pw:
+                body["new_password"] = new_pw
+            try:
+                api.patch(f"/admin/users/{target['id']}", json=body)
+                st.success("User updated.")
+                st.rerun()
+            except ApiError as exc:
+                show_error(exc)
 
-            else:
-
+        with st.expander("⚠️ Danger zone"):
+            st.write(
+                f"Delete **{target['username']}** and all "
+                f"{target['documents']} of their documents."
+            )
+            if st.button("Delete user", key="del_user"):
                 try:
+                    api.delete(f"/admin/users/{target['id']}")
+                    st.rerun()
+                except ApiError as exc:
+                    show_error(exc)
 
-                    chat_data = response.json()
-
-                    answer = chat_data.get(
-                        "answer",
-                        "No answer was returned.",
-                    )
-
-                    st.markdown(answer)
-
-                    # ----------------------------------------
-                    # Retrieval statistics
-                    # ----------------------------------------
-
-                    vector_count = chat_data.get(
-                        "vector_result_count"
-                    )
-
-                    graph_count = chat_data.get(
-                        "graph_result_count"
-                    )
-
-                    if (
-                        vector_count is not None
-                        or graph_count is not None
-                    ):
-
-                        st.caption(
-                            f"Vector results: "
-                            f"{vector_count or 0} | "
-                            f"Graph results: "
-                            f"{graph_count or 0}"
-                        )
-
-                except Exception as e:
-
-                    answer = (
-                        f"Unable to process response: {e}"
-                    )
-
-                    st.error(answer)
-
-        # ----------------------------------------------------
-        # Save assistant response
-        # ----------------------------------------------------
-
-        st.session_state.chat_history.append(
-            {
-                "role": "assistant",
-                "content": answer,
-            }
+    with docs_tab:
+        docs = api.get("/admin/documents")["documents"]
+        st.caption(
+            "Admins can see and remove files, but cannot read their content."
         )
+        if docs:
+            st.dataframe(
+                pd.DataFrame(docs)[
+                    ["owner", "filename", "file_type", "size_bytes",
+                     "chunks", "created_at"]
+                ],
+                hide_index=True, width="stretch",
+            )
+            names = {
+                d["id"]: f"{d['owner']} / {d['filename']}" for d in docs
+            }
+            pick = st.selectbox(
+                "Remove document", list(names), format_func=names.get
+            )
+            if st.button("Delete document"):
+                api.delete(f"/admin/documents/{pick}")
+                st.rerun()
+        else:
+            st.info("No documents.")
+
+    with audit_tab:
+        prefix = st.text_input("Filter by action prefix (e.g. login)")
+        events = api.get(
+            "/admin/audit", params={"limit": 500, "action": prefix or None}
+        )["events"]
+        if events:
+            st.dataframe(
+                pd.DataFrame(events)[
+                    ["ts", "username", "action", "detail"]
+                ],
+                hide_index=True, width="stretch",
+            )
+        else:
+            st.info("No events.")
+
+    with settings_tab:
+        stats = api.get("/admin/stats")
+        signup = st.toggle(
+            "Allow self-registration on the login page",
+            value=stats["allow_signup"],
+        )
+        if signup != stats["allow_signup"]:
+            api.put("/admin/settings", json={"allow_signup": signup})
+            st.rerun()
 
 
 # ============================================================
-# RESET
+# MAIN
 # ============================================================
 
-if st.session_state.document_id:
+if not st.session_state.get("token"):
+    login_page()
+    st.stop()
 
+user = st.session_state.user
+
+PAGES = {
+    "📊 Dashboard": dashboard_page,
+    "📁 My Documents": documents_page,
+    "💬 Chat": chat_page,
+    "🕸️ Knowledge Graph": graph_page,
+    "👤 Account": account_page,
+}
+
+if user["role"] == "admin":
+    PAGES["🛡️ Admin Panel"] = admin_page
+
+with st.sidebar:
+    st.title("🧠 AKSAN")
+    st.write(f"Signed in as **{user['username']}**")
+    st.caption(user["role"].capitalize())
+    choice = st.radio("Navigate", list(PAGES), label_visibility="collapsed")
     st.divider()
-
-    if st.button(
-        "🔄 Start New Document",
-        use_container_width=True,
-    ):
-
-        st.session_state.document_id = None
-        st.session_state.filename = None
-        st.session_state.file_type = None
-        st.session_state.ingestion_complete = False
-        st.session_state.upload_response = None
-        st.session_state.graph_response = None
-        st.session_state.chat_history = []
-
+    if st.button("Sign out", width="stretch"):
+        st.session_state.clear()
         st.rerun()
 
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "Hybrid RAG • FastAPI • Streamlit • FAISS • Neo4j • OpenAI"
-)
+try:
+    PAGES[choice]()
+except ApiError as exc:
+    show_error(exc)

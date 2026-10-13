@@ -336,3 +336,40 @@ def search_graph(
         record.data()
         for record in records
     ]
+
+
+# =========================================================
+# Delete Document Graph
+# =========================================================
+
+def delete_document_graph(
+    document_id: str,
+):
+
+    driver.execute_query(
+        """
+        MATCH ()-[r:RELATES_TO {document_id: $document_id}]->()
+        DELETE r
+        """,
+        document_id=document_id,
+        database_=NEO4J_DATABASE,
+    )
+
+    driver.execute_query(
+        """
+        MATCH (d:Document {document_id: $document_id})
+        DETACH DELETE d
+        """,
+        document_id=document_id,
+        database_=NEO4J_DATABASE,
+    )
+
+    # Remove entities no longer referenced by any document
+    driver.execute_query(
+        """
+        MATCH (e:Entity)
+        WHERE NOT (:Document)-[:CONTAINS_ENTITY]->(e)
+        DETACH DELETE e
+        """,
+        database_=NEO4J_DATABASE,
+    )
