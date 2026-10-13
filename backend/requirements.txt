@@ -13,8 +13,8 @@ openpyxl
 Pillow
 pytesseract
 pypdfium2
-rapidocr
-onnxruntime
+rapidocr; python_version < "3.14"
+onnxruntime; python_version < "3.14"
 python-pptx
 beautifulsoup4
 
