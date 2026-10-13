@@ -577,3 +577,8 @@ OpenAI key and/or Neo4j credentials later to switch to LLM answers and Neo4j.
 - **Docker:** `docker compose up --build`
 
 Then open http://localhost:8501 and sign in as `admin` (password = `ADMIN_PASSWORD` in `.env`).
+
+### Internal server / LAN access
+
+Run `run_server.bat` (Windows) or `./run_server.sh`, then clients open
+`http://<server-ip>:8501`. Full guide, firewall rules and HTTPS: `deploy/LAN.md`.

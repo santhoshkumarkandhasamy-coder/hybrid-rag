@@ -1,0 +1,7 @@
+# Internal HTTPS with Caddy's own CA (for LAN hostnames / IPs).
+# Clients must trust Caddy's root certificate once (see deploy/LAN.md).
+{$DOMAIN} {
+	tls internal
+	encode gzip
+	reverse_proxy frontend:8501
+}
