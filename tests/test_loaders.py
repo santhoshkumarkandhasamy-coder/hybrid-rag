@@ -81,3 +81,23 @@ def test_unsupported(tmp_path):
     p.write_bytes(b"MZ")
     with pytest.raises(ValueError):
         extract_file_data(str(p))
+
+
+def test_scanned_pdf_uses_ocr(tmp_path):
+    import pytest
+
+    pytest.importorskip("rapidocr")
+    from PIL import Image, ImageDraw, ImageFont
+
+    font = ImageFont.truetype(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 34
+    )
+    img = Image.new("RGB", (1240, 400), "white")
+    ImageDraw.Draw(img).text(
+        (40, 80), "Dividend distribution policy", fill="black", font=font
+    )
+    pdf = tmp_path / "scan.pdf"
+    img.save(pdf)  # image-only PDF, no text layer
+
+    text = extract_file_data(str(pdf))["text"]
+    assert "Dividend" in text

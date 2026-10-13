@@ -99,21 +99,75 @@ def convert_with_libreoffice(file_path: str, target: str) -> str:
 # OCR
 # ============================================================
 
-def _ocr_image(image) -> str:
+class OcrUnavailable(RuntimeError):
+    pass
+
+
+_rapid_engine = None
+
+
+def _tesseract_ready() -> bool:
+    """True if a tesseract binary can be found (PATH or Windows default)."""
 
     import pytesseract
+
+    if shutil.which("tesseract"):
+        return True
+
+    for path in (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ):
+        if Path(path).exists():
+            pytesseract.pytesseract.tesseract_cmd = path
+            return True
+
+    return False
+
+
+def _ocr_rapid(image) -> str:
+    """Pure-pip OCR (bundled models, no external program needed)."""
+
+    global _rapid_engine
+
+    import numpy as np
+
+    try:
+        if _rapid_engine is None:
+            from rapidocr import RapidOCR
+
+            _rapid_engine = RapidOCR()
+    except ImportError:
+        raise OcrUnavailable(
+            "No OCR engine available. Run: pip install rapidocr onnxruntime"
+        )
+
+    result = _rapid_engine(np.array(image.convert("RGB")))
+
+    return "\n".join(result.txts) if result and result.txts else ""
+
+
+def _ocr_image(image) -> str:
 
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
 
-    # Upscale small images; tesseract does poorly below ~300 DPI.
+    # Upscale small images; OCR does poorly below ~300 DPI.
     if max(image.size) < 1500:
         scale = 1500 / max(image.size)
         image = image.resize(
             (int(image.width * scale), int(image.height * scale))
         )
 
-    return pytesseract.image_to_string(image)
+    try:
+        if _tesseract_ready():
+            import pytesseract
+
+            return pytesseract.image_to_string(image)
+    except ImportError:
+        pass
+
+    return _ocr_rapid(image)
 
 
 # ============================================================
@@ -155,6 +209,9 @@ def _ocr_pdf_page(file_path: str, index: int) -> str:
         image = pdf[index].render(scale=2.5).to_pil()
 
         return _ocr_image(image).strip()
+
+    except OcrUnavailable:
+        raise
 
     except Exception:
         return ""
