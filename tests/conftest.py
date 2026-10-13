@@ -48,6 +48,18 @@ def client(tmp_path, monkeypatch):
         lambda store, document_id: saved.__setitem__(document_id, store)
     )
     fake.load_vector_store = lambda document_id: saved[document_id]
+    def search_documents(document_ids, query, top_k=5):
+        out = []
+        for did in document_ids:
+            if did in saved:
+                for d, sc in saved[did].similarity_search_with_score(query, k=top_k):
+                    out.append({"content": d.page_content, "score": sc,
+                                "document_id": did,
+                                "filename": d.metadata.get("filename")})
+        return sorted(out, key=lambda r: r["score"])[:top_k]
+
+    fake.search_documents = search_documents
+    fake.warm_up = lambda: None
     fake.delete_vector_store = lambda document_id: saved.pop(document_id, None)
     monkeypatch.setitem(sys.modules, "backend.ingestion.vector_store", fake)
 

@@ -1,9 +1,5 @@
 import logging
 
-from backend.retrieval.vector_search import (
-    search_vector_store,
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -30,26 +26,13 @@ def hybrid_search(
     # 1. Vector Search (all documents)
     # ==========================================
 
-    vector_results = []
+    from backend.ingestion.vector_store import search_documents
 
-    for document_id in document_ids:
-
-        try:
-            vector_results.extend(
-                search_vector_store(
-                    document_id=document_id,
-                    query=query,
-                    top_k=vector_top_k,
-                )
-            )
-        except FileNotFoundError:
-            logger.warning(
-                "No vector index for %s", document_id
-            )
-
-    # FAISS scores are distances: lower is better.
-    vector_results.sort(key=lambda r: r["score"])
-    vector_results = vector_results[:vector_top_k]
+    vector_results = search_documents(
+        document_ids=document_ids,
+        query=query,
+        top_k=vector_top_k,
+    )
 
     # ==========================================
     # 2. Knowledge Graph Search (best effort)

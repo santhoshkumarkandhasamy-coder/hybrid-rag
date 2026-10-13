@@ -1,3 +1,4 @@
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,9 +11,19 @@ from backend.api.upload import router as upload_router
 from backend.core.db import init_db
 
 
+def _warm_up():
+    try:
+        from backend.ingestion.vector_store import warm_up
+
+        warm_up()
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    threading.Thread(target=_warm_up, daemon=True).start()
     yield
 
 
