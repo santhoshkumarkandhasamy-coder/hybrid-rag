@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
+from backend.core import config
 from backend.core.db import audit, get_conn
 from backend.core.deps import get_current_user, get_owned_document
 from backend.models.schemas import SearchRequest
@@ -70,7 +71,10 @@ def chat(request: SearchRequest, user=Depends(get_current_user)):
             graph_top_k=request.top_k,
         )
 
-        from backend.llm.answer_generator import generate_answer
+        if config.USE_OPENAI:
+            from backend.llm.answer_generator import generate_answer
+        else:
+            from backend.llm.local_answer import generate_answer
 
         answer = generate_answer(
             question=request.query,

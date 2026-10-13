@@ -11,7 +11,7 @@ def get_graph(document_id: str, user=Depends(get_current_user)):
     get_owned_document(document_id, user)
 
     try:
-        from backend.graph.neo4j_store import get_document_graph
+        from backend.graph.store import get_document_graph
 
         return get_document_graph(document_id)
 

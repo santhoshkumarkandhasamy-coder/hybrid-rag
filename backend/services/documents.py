@@ -220,7 +220,7 @@ def delete_document(doc: dict) -> None:
         logger.warning("Vector delete failed: %s", exc)
 
     try:
-        from backend.graph.neo4j_store import delete_document_graph
+        from backend.graph.store import delete_document_graph
 
         delete_document_graph(doc["id"])
     except Exception as exc:

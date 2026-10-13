@@ -553,7 +553,7 @@ Choose and add a license before distributing this project publicly.
 ### First run
 
 ```bash
-cp .env.example .env   # set ADMIN_PASSWORD, OPENAI_*, NEO4J_*
+cp .env.example .env   # set ADMIN_PASSWORD; OPENAI_*/NEO4J_* are optional
 uvicorn backend.main:app --reload          # API on :8000
 streamlit run frontend/app.py               # UI on :8501
 ```
@@ -561,3 +561,11 @@ streamlit run frontend/app.py               # UI on :8501
 Sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`. If `ADMIN_PASSWORD` is unset,
 a random one is printed once in the backend log. Run tests with `pytest`.
 Put the app behind HTTPS (reverse proxy) in production.
+
+### No API keys needed
+
+Leave `OPENAI_*` and `NEO4J_*` blank and the app runs fully offline:
+embeddings are local (BAAI/bge-small, downloaded once), the knowledge graph is
+stored in SQLite with built-in entity extraction, and answers are assembled
+from the best-matching passages of your files (with source names). Add an
+OpenAI key and/or Neo4j credentials later to switch to LLM answers and Neo4j.

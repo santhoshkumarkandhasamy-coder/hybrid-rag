@@ -58,7 +58,7 @@ def hybrid_search(
     graph_results = []
 
     try:
-        from backend.graph.neo4j_store import search_graph
+        from backend.graph.store import search_graph
 
         for document_id in document_ids:
             graph_results.extend(

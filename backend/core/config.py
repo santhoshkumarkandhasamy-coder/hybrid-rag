@@ -69,3 +69,19 @@ def _load_secret_key() -> str:
 
 SECRET_KEY = _load_secret_key()
 JWT_ALGORITHM = "HS256"
+
+
+# ------------------------------------------------------------------
+# Optional external services. With none configured the app runs fully
+# offline: local SQLite knowledge graph + extractive answers.
+# ------------------------------------------------------------------
+
+USE_OPENAI = bool(
+    os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_CHAT_MODEL")
+)
+
+USE_NEO4J = bool(
+    os.getenv("NEO4J_URI")
+    and os.getenv("NEO4J_USERNAME")
+    and os.getenv("NEO4J_PASSWORD")
+)

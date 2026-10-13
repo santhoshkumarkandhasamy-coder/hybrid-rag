@@ -1,10 +1,21 @@
-from backend.graph.extractor import extract_graph_data
-from backend.ingestion.chunker import split_text
-from backend.graph.neo4j_store import (
+from backend.core import config
+from backend.graph.store import (
     create_document,
     store_entities,
     store_relationships,
 )
+
+
+def extract_graph_data(text: str) -> dict:
+    if config.USE_OPENAI:
+        from backend.graph.extractor import extract_graph_data as llm
+        return llm(text)
+
+    from backend.graph.local_extractor import extract_graph_data as local
+    return local(text)
+
+
+from backend.ingestion.chunker import split_text
 
 MAX_GRAPH_WINDOWS = 10
 

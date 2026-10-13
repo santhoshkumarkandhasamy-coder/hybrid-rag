@@ -40,6 +40,24 @@ CREATE TABLE IF NOT EXISTS documents (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS graph_entities (
+    document_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    PRIMARY KEY (document_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS graph_relations (
+    document_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    type TEXT NOT NULL,
+    PRIMARY KEY (document_id, source, target, type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gent_doc ON graph_entities(document_id);
+CREATE INDEX IF NOT EXISTS idx_grel_doc ON graph_relations(document_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

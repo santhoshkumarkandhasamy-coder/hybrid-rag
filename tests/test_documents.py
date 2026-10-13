@@ -27,8 +27,7 @@ def test_multi_file_upload_and_listing(client, make_user):
     assert [x["status"] for x in results] == [
         "completed", "completed", "failed"
     ]
-    # graph backend isn't configured in tests -> degraded, not failed
-    assert results[0]["warning"]
+    assert results[0]["warning"] is None
 
     listing = client.get("/documents", headers=user).json()
     assert len(listing["documents"]) == 2
@@ -108,3 +107,38 @@ def test_path_traversal_filename_sanitised(client, make_user, tmp_path):
     r = upload(client, alice, "../../evil.txt", b"x").json()["results"][0]
     assert r["filename"] == "evil.txt"
     assert not (tmp_path.parent / "evil.txt").exists()
+
+
+def test_offline_chat_and_graph(client, make_user):
+    alice = make_user("alice")
+    text = (
+        b"Acme Corp was founded by Jane Smith in Berlin. "
+        b"Acme Corp builds Widget Pro for Siemens AG. "
+        b"The weather is mild in spring."
+    )
+    doc = upload(client, alice, "notes.txt", text).json()["results"][0]
+    assert doc["entities"] > 0 and doc["relationships"] > 0
+
+    graph = client.get(f"/graph/{doc['document_id']}", headers=alice).json()
+    names = {e["name"] for e in graph["entities"]}
+    assert "Acme Corp" in names and "Jane Smith" in names
+
+    reply = client.post(
+        "/chat", json={"query": "Who founded Acme Corp?"}, headers=alice
+    )
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert "Jane Smith" in body["answer"]
+    assert body["sources"] == ["notes.txt"]
+
+
+def test_graph_removed_with_document(client, make_user):
+    alice = make_user("alice")
+    doc_id = upload(client, alice, "a.txt",
+                    b"Acme Corp hired Jane Smith.").json()["results"][0][
+        "document_id"]
+    client.delete(f"/documents/{doc_id}", headers=alice)
+    from backend.core.db import get_conn
+    with get_conn() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_entities").fetchone()[0] == 0
