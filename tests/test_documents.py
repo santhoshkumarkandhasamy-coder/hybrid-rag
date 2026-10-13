@@ -189,3 +189,18 @@ def test_ollama_answer_and_fallback(client, make_user, monkeypatch):
     monkeypatch.setattr(requests, "post", boom)
     r = client.post("/chat", json={"query": "who is Jane Smith"}, headers=alice)
     assert r.status_code == 200 and "Jane Smith" in r.json()["answer"]
+
+
+def test_offline_synonyms_where_studied(client, make_user):
+    alice = make_user("alice")
+    text = (
+        b"[Page 1]\nESWARA RAO DUDDU\nChartered Accountant\n"
+        b"[Page 2]\nEDUCATION\nB.Com, Andhra University, 2008\n"
+        b"Qualified Chartered Accountant, ICAI, 2012\n"
+    )
+    upload(client, alice, "resume.txt", text)
+    r = client.post(
+        "/chat", json={"query": "where he studied"}, headers=alice
+    ).json()["answer"]
+    assert "Andhra University" in r
+    assert "[Page" not in r

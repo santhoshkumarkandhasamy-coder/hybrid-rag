@@ -20,8 +20,57 @@ _STOP = {
 }
 
 
+# Offline stand-in for "understanding": related words per topic.
+_TOPICS = [
+    {"study", "studied", "studying", "education", "educational",
+     "qualification", "qualifications", "qualified", "degree", "graduate",
+     "graduated", "graduation", "university", "college", "school",
+     "institute", "bachelor", "master", "diploma", "certified",
+     "certification", "course", "academic"},
+    {"work", "worked", "working", "experience", "employer", "employment",
+     "job", "career", "company", "role", "position", "designation",
+     "responsibilities", "organisation", "organization", "joined"},
+    {"skill", "skills", "expertise", "proficient", "tools", "technologies",
+     "technology", "competencies", "knowledge"},
+    {"contact", "email", "mail", "phone", "mobile", "number", "address",
+     "linkedin", "reach"},
+    {"salary", "pay", "ctc", "compensation", "price", "cost", "fee", "fees",
+     "amount", "payment"},
+    {"date", "when", "year", "years", "period", "duration", "tenure"},
+    {"project", "projects", "achievement", "achievements", "accomplished",
+     "executed", "delivered"},
+    {"policy", "rule", "rules", "guideline", "guidelines", "procedure"},
+]
+
+
+def _stem(word: str) -> str:
+    for suffix in ("ing", "ed", "es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
 def _terms(text: str) -> set[str]:
     return {w.lower() for w in _WORD.findall(text)} - _STOP
+
+
+def _expand(terms: set[str]) -> set[str]:
+    """Add related words so 'studied' also finds 'Education'."""
+
+    expanded = set(terms)
+    stems = {_stem(t) for t in terms}
+
+    for topic in _TOPICS:
+        if terms & topic or stems & {_stem(w) for w in topic}:
+            expanded |= topic
+
+    return expanded
+
+
+def _hits(terms: set[str], text: str) -> int:
+    words = {w.lower() for w in _WORD.findall(text)}
+    stemmed = {_stem(w) for w in words}
+    return sum(1 for t in terms if t in words or _stem(t) in stemmed)
 
 
 def wants_overview(question: str) -> bool:
@@ -78,36 +127,58 @@ def generate_answer(
     question: str,
     vector_results: list[dict],
     graph_results: list[dict],
-    max_sentences: int = 5,
+    max_sentences: int = 6,
 ) -> str:
 
-    terms = _terms(question)
+    terms = _expand(_terms(question))
     candidates = []
 
     for rank, result in enumerate(vector_results):
-        for sentence in _SENT.split(result.get("content", "")):
-            sentence = sentence.strip()
-            if len(sentence) < 8:
-                continue
-            overlap = len(terms & _terms(sentence))
-            # prefer keyword overlap, then better-ranked chunks
-            candidates.append(
-                (overlap, -rank, sentence, result.get("filename"))
-            )
+
+        content = _clean(result.get("content", ""))
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
+
+        for index, line in enumerate(lines):
+
+            for sentence in _SENT.split(line):
+                sentence = sentence.strip(" -•\t")
+
+                if len(sentence) < 8:
+                    continue
+
+                score = _hits(terms, sentence)
+
+                if score == 0:
+                    continue
+
+                # include the following line: headings like
+                # "EDUCATION" are followed by the actual details
+                if len(sentence) < 40 and index + 1 < len(lines):
+                    sentence = f"{sentence}: {lines[index + 1]}"
+
+                candidates.append(
+                    (score, -rank, sentence, result.get("filename"))
+                )
 
     candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
     picked, seen = [], set()
 
-    for overlap, _, sentence, filename in candidates:
-        if overlap == 0 and picked:
-            break
+    for _, _, sentence, filename in candidates:
         if sentence in seen:
             continue
         seen.add(sentence)
         picked.append((sentence, filename))
         if len(picked) >= max_sentences:
             break
+
+    # Nothing matched by words: show the best-ranked passages instead
+    # (the vector search found them by meaning).
+    if not picked:
+        for result in vector_results[:2]:
+            text = _clean(result.get("content", ""))[:700]
+            if text:
+                picked.append((text, result.get("filename")))
 
     if not picked:
         return (
@@ -121,12 +192,11 @@ def generate_answer(
         suffix = f" _({filename})_" if filename else ""
         lines.append(f"- {sentence}{suffix}")
 
-    facts = []
-    for g in graph_results:
-        if g.get("relationship"):
-            facts.append(
-                f"{g['source']} → {g['relationship']} → {g['target']}"
-            )
+    facts = [
+        f"{g['source']} → {g['relationship']} → {g['target']}"
+        for g in graph_results
+        if g.get("relationship")
+    ]
 
     if facts:
         lines += ["", "**Related knowledge-graph links:**", ""]
