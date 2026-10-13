@@ -582,3 +582,11 @@ Then open http://localhost:8501 and sign in as `admin` (password = `ADMIN_PASSWO
 
 Run `run_server.bat` (Windows) or `./run_server.sh`, then clients open
 `http://<server-ip>:8501`. Full guide, firewall rules and HTTPS: `deploy/LAN.md`.
+
+### Better answers without a paid key (Ollama)
+
+1. Install Ollama from https://ollama.com on the server and run `ollama pull llama3.2`.
+2. In `.env` set `OLLAMA_MODEL=llama3.2` and restart the app.
+
+Chat then writes real answers/summaries from your documents using a free
+local model. If Ollama is stopped, the app falls back to offline extracts.

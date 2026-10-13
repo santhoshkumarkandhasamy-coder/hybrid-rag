@@ -56,10 +56,17 @@ def extract_graph_data(text: str) -> dict:
 
         found = []
 
-        for match in _PHRASE.findall(sentence) + _ACRONYM.findall(sentence):
-            name = _clean(match)
+        phrases = [_clean(m) for m in _PHRASE.findall(sentence)]
+        multiword = " ".join(p for p in phrases if " " in p)
+
+        for name in phrases:
             if len(name) > 2 and name not in _STOP:
                 found.append(name)
+
+        for acro in _ACRONYM.findall(sentence):
+            # skip pieces of a longer name, e.g. RAO in "ESWARA RAO DUDDU"
+            if acro not in multiword.split() and acro not in found:
+                found.append(acro)
 
         found = list(dict.fromkeys(found))
         counts.update(found)

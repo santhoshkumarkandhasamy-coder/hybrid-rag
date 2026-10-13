@@ -85,3 +85,8 @@ USE_NEO4J = bool(
     and os.getenv("NEO4J_USERNAME")
     and os.getenv("NEO4J_PASSWORD")
 )
+
+# Free local LLM via Ollama (https://ollama.com), e.g. OLLAMA_MODEL=llama3.2
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
+USE_OLLAMA = bool(OLLAMA_MODEL)

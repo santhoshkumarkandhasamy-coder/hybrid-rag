@@ -142,3 +142,50 @@ def test_graph_removed_with_document(client, make_user):
     with get_conn() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM graph_entities").fetchone()[0] == 0
+
+
+def test_offline_overview_and_names_not_split(client, make_user):
+    alice = make_user("alice")
+    text = (
+        b"ESWARA RAO DUDDU\nChartered Accountant\n\nEXPERIENCE\n"
+        b"Executed end-to-end securitisation transactions.\n\nEDUCATION\n"
+        b"Qualified CA in 2012.\n"
+    )
+    doc = upload(client, alice, "resume.txt", text).json()["results"][0]
+    graph = client.get(f"/graph/{doc['document_id']}", headers=alice).json()
+    names = {e["name"] for e in graph["entities"]}
+    assert "ESWARA RAO DUDDU" in names
+    assert "RAO" not in names and "ESWARA" not in names
+
+    reply = client.post(
+        "/chat", json={"query": "tell about this resume"}, headers=alice
+    ).json()
+    assert "ESWARA RAO DUDDU" in reply["answer"]
+    assert "EXPERIENCE" in reply["answer"]
+    assert reply["sources"] == ["resume.txt"]
+
+
+def test_ollama_answer_and_fallback(client, make_user, monkeypatch):
+    alice = make_user("alice")
+    upload(client, alice, "r.txt", b"Jane Smith is a chartered accountant.")
+
+    from backend.core import config
+    import requests
+
+    monkeypatch.setattr(config, "USE_OLLAMA", True)
+    monkeypatch.setattr(config, "OLLAMA_MODEL", "llama3.2")
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"message": {"content": "Jane is a CA."}}
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp())
+    r = client.post("/chat", json={"query": "who is Jane Smith"}, headers=alice)
+    assert r.json()["answer"] == "Jane is a CA."
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(requests, "post", boom)
+    r = client.post("/chat", json={"query": "who is Jane Smith"}, headers=alice)
+    assert r.status_code == 200 and "Jane Smith" in r.json()["answer"]
