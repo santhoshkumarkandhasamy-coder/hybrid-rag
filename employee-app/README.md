@@ -32,10 +32,10 @@ self-hosted)** — no third-party cloud database.
 - Push notification to manager/Admin on new request and to employee on decision.
 
 ### 1.4 Food Enrollment
-- Employees enroll for meals (Breakfast / Lunch / Dinner / Snacks) per day or week.
-- Veg / Non-veg / special diet preference.
-- Enrollment cut-off time (e.g. previous day 6 PM), configurable by Admin.
-- Admin/canteen view: daily headcount summary per meal; export to Excel.
+- Simple daily choice: **"Need food today?" → Yes / No** (no meal type or veg/non-veg options).
+- Employee can mark Yes/No for upcoming dates (e.g. the whole week) and change it before the cut-off.
+- Enrollment cut-off time (e.g. previous day 6 PM or same day 10 AM), configurable by Admin.
+- Admin view: daily count of employees who need food, with names; export to Excel.
 
 ### 1.5 Announcements
 - Admin posts general announcements (title, message, optional image/PDF, priority).
@@ -57,7 +57,7 @@ self-hosted)** — no third-party cloud database.
 - Explicit location consent; tracking never runs outside an active trip.
 
 ### 1.8 Admin Panel (inside the app, role-based)
-- Full rights: **add, remove, modify** employees, departments, shifts, holidays, leave types, leave quotas, permission limits, food menu/cut-offs, announcements.
+- Full rights: **add, remove, modify** employees, departments, shifts, holidays, leave types, leave quotas, permission limits, food cut-off time, announcements.
 - Assign roles and permissions (Admin, HR, Manager, Employee) — granular rights.
 - Approve / reject leave and permission requests.
 - Unlock accounts, reset passwords, deactivate employees.
@@ -68,12 +68,12 @@ self-hosted)** — no third-party cloud database.
 
 ## 2. Recommended Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Mobile app | **Flutter** (single codebase for Android & iOS) |
-| State management | Riverpod / Bloc |
-| Backend API | **Python FastAPI** (or Node.js NestJS) — REST + JSON |
-| Database | **PostgreSQL** (self-hosted on company server) |
+| Layer | Part | Technology |
+|---|---|---|
+| **Frontend** | Mobile app | **Flutter** (single codebase for Android & iOS) |
+| Frontend | State management | Riverpod |
+| **Backend** | REST API | **Python FastAPI** — REST + JSON |
+| **Database** | Main data store | **PostgreSQL** (self-hosted on company server) |
 | Cache / rate limit | Redis |
 | File storage | Server local disk / MinIO (self-hosted) for photos & attachments |
 | Push notifications | Firebase Cloud Messaging (only for notification delivery, no data storage) |
@@ -104,7 +104,7 @@ self-hosted)** — no third-party cloud database.
 
 `users`, `roles`, `permissions`, `role_permissions`, `departments`, `shifts`,
 `employee_profiles`, `attendance`, `leave_types`, `leave_balances`, `leave_requests`,
-`permission_requests`, `late_records`, `holidays`, `food_menus`, `food_enrollments`,
+`permission_requests`, `late_records`, `holidays`, `food_enrollments` (employee_id, date, need_food),
 `announcements`, `announcement_reads`, `trips`, `trip_locations`, `sos_alerts`,
 `refresh_tokens`, `device_tokens`, `audit_logs`, `settings`.
 
@@ -121,7 +121,7 @@ GET    /api/attendance?from=&to=
 GET    /api/leave/balance              POST /api/leave/requests    GET /api/leave/requests
 POST   /api/permission/requests        GET  /api/permission/requests
 GET    /api/late
-GET    /api/food/menu                  POST /api/food/enroll       GET /api/food/my-enrollments
+PUT    /api/food/enrollment  {date, need_food: true|false}           GET /api/food/my-enrollments
 GET    /api/announcements
 POST   /api/trips/start                POST /api/trips/{id}/location
 POST   /api/trips/{id}/end             POST /api/trips/{id}/sos
@@ -153,9 +153,11 @@ GET    /api/admin/export?type=all|attendance|leave|late|permission|food&from=&to
 
 ```
 employee-app/
-├── backend/            # FastAPI app, models, routers, services, alembic migrations
-├── mobile/             # Flutter app (lib/features/<feature>/...)
-├── deploy/             # docker-compose.yml, nginx.conf, backup scripts
+├── frontend/           # Flutter mobile app (lib/features/<feature>/...)
+├── backend/            # FastAPI app: models, routers, services
+├── database/           # Alembic migrations, schema.sql, seed data, backup/restore scripts
+├── deploy/             # docker-compose.yml, nginx.conf, .env.example
+├── .claude/agents/     # Claude Code sub-agents used to build this project
 └── README.md
 ```
 
@@ -172,14 +174,35 @@ docker compose exec api alembic upgrade head
 docker compose exec api python -m app.scripts.create_admin   # first Admin user
 
 # Mobile
-cd employee-app/mobile
+cd employee-app/frontend
 flutter pub get
 flutter run --dart-define=API_BASE_URL=https://your-office-server/api
 ```
 
 ---
 
-## 9. Prompt to Generate This Application
+## 9. Claude Code Agents
+
+The `.claude/agents/` folder contains sub-agents that Claude Code uses to build the project.
+Copy the folder into the root of your new repository.
+
+| Agent | Responsibility |
+|---|---|
+| `project-architect` | Plans the work, defines API contracts between frontend and backend, splits tasks to other agents |
+| `database-engineer` | PostgreSQL schema, Alembic migrations, indexes, seed data, backup/restore |
+| `backend-developer` | FastAPI endpoints, business rules (leave balance, late, food cut-off, trips), Excel export |
+| `flutter-developer` | Flutter screens, state, API client, secure storage, background location |
+| `security-reviewer` | Reviews auth, RBAC, encryption, OWASP Mobile/API Top 10 issues (read-only) |
+| `qa-tester` | Writes and runs backend pytest and Flutter widget/integration tests |
+| `devops-engineer` | Docker Compose, Nginx + TLS, env config, deployment to the office server |
+
+Usage example in Claude Code: *"Use the project-architect agent to plan the leave module, then
+have database-engineer, backend-developer and flutter-developer implement it, and finish with
+security-reviewer and qa-tester."*
+
+---
+
+## 10. Prompt to Generate This Application
 
 Copy the prompt below into Claude Code (or another AI coding assistant):
 
@@ -218,8 +241,9 @@ FEATURES
    - Manager/Admin approval flow with comments; balances update on approval; push
      notifications both ways.
 3. Late details: list of late arrivals with minutes late, monthly summary.
-4. Food enrollment: enroll for breakfast/lunch/dinner/snacks per day or week with veg/non-veg
-   preference; configurable cut-off time; admin daily headcount report.
+4. Food enrollment: ONLY a simple "Need food?" Yes/No per date (no meal types, no veg/non-veg).
+   Employee can set Yes/No for today and upcoming dates and change it before a configurable
+   cut-off time; Admin sees the daily count and list of employees who need food; Excel export.
 5. Announcements: Admin creates announcements (title, body, image/PDF, priority, target
    departments); push notification; read/unread tracking.
 6. Personal profile: photo, DOB, wedding anniversary, personal & official email, phone,
@@ -231,21 +255,27 @@ FEATURES
    location consent; trip data retention 90 days.
 8. Admin module (role-based, inside the app): full add/remove/modify rights for employees,
    roles & permissions, departments, shifts, holidays, leave types & quotas, permission limits,
-   food menu & cut-off, announcements; approve/reject requests; unlock accounts; reset
+   food cut-off time, announcements; approve/reject requests; unlock accounts; reset
    passwords; deactivate users; view audit logs.
 9. Excel export: one "Export All" button that downloads a single .xlsx with separate sheets
    for Attendance, Leave, Late and Permission, filterable by date range, department and
    employee; also individual exports and a Food enrollment export.
 
 DELIVERABLES
-- backend/: FastAPI project with models, Pydantic schemas, routers, services, Alembic
-  migrations, seed script to create the first Admin, pytest tests for auth, RBAC, leave
-  balance logic and export.
-- mobile/: Flutter project organised by feature (auth, home, attendance, leave, late, food,
+- frontend/: Flutter mobile app (details below).
+- backend/: FastAPI project with models, Pydantic schemas, routers, services, pytest tests
+  for auth, RBAC, leave balance logic, food enrollment and export.
+- database/: PostgreSQL schema via Alembic migrations, schema.sql, seed script for the first
+  Admin + default leave types/roles, backup and restore scripts.
+- frontend/ details: Flutter project organised by feature (auth, home, attendance, leave, late, food,
   announcements, trips, profile, admin), clean UI with bottom navigation, light/dark theme,
   form validation, loading/error states, offline-friendly caching.
 - deploy/: docker-compose.yml, nginx.conf with TLS, .env.example, daily encrypted DB backup
   script.
 - Update README.md with setup, environment variables, API list and build/release steps.
+- Use the sub-agents in .claude/agents/ (project-architect, database-engineer,
+  backend-developer, flutter-developer, security-reviewer, qa-tester, devops-engineer):
+  architect plans first, then database -> backend -> frontend per feature, then security
+  review and tests before moving to the next feature.
 Write clean, well-structured code and implement each feature fully end to end.
 ```
