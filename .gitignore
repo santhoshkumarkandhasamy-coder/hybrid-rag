@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 data/uploads/
 data/faiss/
+# Local chat exports (contain client financial data - do not commit)
+chat_export/
